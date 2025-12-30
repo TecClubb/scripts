@@ -7,6 +7,7 @@ A collection of bash scripts for automating Laravel deployment and troubleshooti
 ```
 ├── laravel/
 │   ├── laravel.sh              # Main Laravel auto-installer
+│   ├── laravel-deploy.sh       # Production deployment script with rollback
 │   ├── laravel-quick-fix.sh    # Quick fix for connection issues
 │   └── laravel-troubleshoot.sh # Diagnostic troubleshooting script
 ```
@@ -71,7 +72,61 @@ The script will prompt you for:
 
 ---
 
-### 2. Quick Fix Script (`laravel/laravel-quick-fix.sh`)
+### 2. Laravel Deployment Script (`laravel/laravel-deploy.sh`)
+
+A production-ready deployment script for existing Laravel applications with automatic rollback capabilities.
+
+#### Features
+
+- **Zero Downtime** - Maintenance mode during deployment only
+- **Automatic Rollback** - Restores previous version on any failure
+- **Database Backups** - Automatic MySQL backup before deployment
+- **Composer Optimization** - Installs dependencies with optimized autoloader
+- **Cache Management** - Clears and rebuilds all Laravel caches
+- **Queue Workers** - Restarts Supervisor-managed workers
+- **Permission Fix** - Sets proper ownership and permissions
+- **Health Checks** - Tests application response after deployment
+- **Backup Cleanup** - Maintains only 10 most recent database backups
+
+#### Usage
+
+```bash
+# Make executable
+chmod +x laravel-deploy.sh
+
+# Run deployment
+./laravel-deploy.sh
+```
+
+#### Deployment Steps
+
+1. Enable maintenance mode
+2. Pull latest code from Git
+3. Install/update Composer dependencies
+4. Run database migrations
+5. Clear all Laravel caches
+6. Rebuild optimized caches
+7. Create storage symlink (if needed)
+8. Reload queue services
+9. Fix file permissions
+10. Optional PHP-FPM restart (user choice)
+11. Test application health
+12. Disable maintenance mode
+
+#### Configuration
+
+Edit the script variables at the top:
+
+```bash
+PROJECT_PATH="/var/www/your-project"  # Path to Laravel project
+BRANCH="main"                         # Git branch to deploy
+PROJECT_NAME="your-project"           # Name for Supervisor workers
+BACKUP_PATH="/var/backups/laravel"    # Database backup location
+```
+
+---
+
+### 3. Quick Fix Script (`laravel/laravel-quick-fix.sh`)
 
 Rapidly diagnose and fix `ERR_CONNECTION_REFUSED` errors after Laravel installation.
 
@@ -102,7 +157,7 @@ sudo bash laravel-quick-fix.sh
 
 ---
 
-### 3. Troubleshooting Script (`laravel/laravel-troubleshoot.sh`)
+### 4. Troubleshooting Script (`laravel/laravel-troubleshoot.sh`)
 
 Comprehensive diagnostic tool for investigating 404 errors and other post-installation issues.
 
@@ -177,12 +232,17 @@ chmod -R 755 /var/www/YOUR_PROJECT
    sudo bash laravel/laravel.sh
    ```
 
-2. **If Connection Refused**
+2. **Deploy Updates to Production**
+   ```bash
+   ./laravel/laravel-deploy.sh
+   ```
+
+3. **If Connection Refused**
    ```bash
    sudo bash laravel/laravel-quick-fix.sh
    ```
 
-3. **If 404 or Other Issues**
+4. **If 404 or Other Issues**
    ```bash
    sudo bash laravel/laravel-troubleshoot.sh
    ```

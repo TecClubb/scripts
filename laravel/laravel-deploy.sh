@@ -157,19 +157,14 @@ php artisan view: cache
 php artisan event:cache
 print_status "Caches rebuilt"
 
-# Step 7: Optimize autoloader
-print_info "Optimizing autoloader..."
-composer dump-autoload --optimize --no-dev
-print_status "Autoloader optimized"
-
-# Step 8: Storage link (if needed)
+# Step 7: Storage link (if needed)
 if [ !  -L "$PROJECT_PATH/public/storage" ]; then
     print_info "Creating storage symlink..."
     php artisan storage:link
     print_status "Storage symlink created"
 fi
 
-# Step 9: Reload services (Queue workers, Horizon, Octane, etc.)
+# Step 8: Reload services (Queue workers, Horizon, Octane, etc.)
 print_info "Reloading services..."
 php artisan reload 2>/dev/null || print_warning "php artisan reload not available (Laravel 11+ only)"
 
@@ -179,19 +174,26 @@ if command -v supervisorctl &> /dev/null; then
     sudo supervisorctl restart ${PROJECT_NAME}-worker:* 2>/dev/null && print_status "Queue workers restarted" || print_warning "No queue workers found"
 fi
 
-# Step 10: Fix permissions
+# Step 9: Fix permissions
 print_info "Setting proper permissions..."
 sudo chown -R www-data:www-data $PROJECT_PATH
 sudo chmod -R 755 $PROJECT_PATH
 sudo chmod -R 775 $PROJECT_PATH/storage $PROJECT_PATH/bootstrap/cache
 print_status "Permissions set"
 
-# Step 11: Restart PHP-FPM (optional but recommended)
-print_info "Restarting PHP-FPM..."
-PHP_VERSION=$(php -r "echo PHP_MAJOR_VERSION. '. '.PHP_MINOR_VERSION;")
-sudo systemctl restart php${PHP_VERSION}-fpm 2>/dev/null && print_status "PHP-FPM restarted" || print_warning "Could not restart PHP-FPM"
+# Step 10: Restart PHP-FPM (user choice)
+print_info "PHP-FPM restart is only needed for PHP configuration changes"
+read -p "Restart PHP-FPM? (y/n): " -n 1 -r
+echo
+if [[ $REPLY =~ ^[Yy]$ ]]; then
+    print_info "Restarting PHP-FPM..."
+    PHP_VERSION=$(php -r "echo PHP_MAJOR_VERSION.'.'.PHP_MINOR_VERSION;")
+    sudo systemctl restart php${PHP_VERSION}-fpm 2>/dev/null && print_status "PHP-FPM restarted" || print_warning "Could not restart PHP-FPM"
+else
+    print_status "PHP-FPM restart skipped"
+fi
 
-# Step 12: Test application health
+# Step 11: Test application health
 print_info "Testing application health..."
 HTTP_CODE=$(curl -o /dev/null -s -w "%{http_code}" http://localhost 2>/dev/null || echo "000")
 if [ "$HTTP_CODE" = "503" ] || [ "$HTTP_CODE" = "200" ]; then
@@ -200,7 +202,7 @@ else
     print_warning "Unexpected HTTP code: $HTTP_CODE"
 fi
 
-# Step 13: Disable maintenance mode
+# Step 12: Disable maintenance mode
 print_info "Disabling maintenance mode..."
 php artisan up
 print_status "Maintenance mode disabled"
