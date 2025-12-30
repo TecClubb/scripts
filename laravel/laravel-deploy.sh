@@ -93,8 +93,8 @@ mkdir -p $BACKUP_PATH
 
 # Backup database
 print_status "Backing up database..."
-DB_NAME=$(grep DB_DATABASE . env | cut -d '=' -f2)
-DB_USER=$(grep DB_USERNAME . env | cut -d '=' -f2)
+DB_NAME=$(grep DB_DATABASE .env | cut -d '=' -f2)
+DB_USER=$(grep DB_USERNAME .env | cut -d '=' -f2)
 DB_PASS=$(grep DB_PASSWORD .env | cut -d '=' -f2)
 
 if [ !  -z "$DB_NAME" ]; then
@@ -127,7 +127,7 @@ if [ "$CURRENT_COMMIT" = "$NEW_COMMIT" ]; then
 else
     print_status "Code updated successfully"
     print_info "Changes:"
-    git log --oneline $CURRENT_COMMIT. .$NEW_COMMIT
+    git log --oneline $CURRENT_COMMIT..$NEW_COMMIT
 fi
 
 # Step 3: Install/Update Composer dependencies
@@ -142,7 +142,7 @@ print_status "Database migrations completed"
 
 # Step 5: Clear old caches
 print_info "Clearing caches..."
-php artisan config: clear
+php artisan config:clear
 php artisan cache:clear
 php artisan route:clear
 php artisan view:clear
@@ -153,7 +153,7 @@ print_status "Caches cleared"
 print_info "Rebuilding optimized caches..."
 php artisan config:cache
 php artisan route:cache
-php artisan view: cache
+php artisan view:cache
 php artisan event:cache
 print_status "Caches rebuilt"
 
