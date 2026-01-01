@@ -176,9 +176,14 @@ fi
 
 # Step 9: Fix permissions
 print_info "Setting proper permissions..."
-sudo chown -R www-data:www-data $PROJECT_PATH
-sudo chmod -R 755 $PROJECT_PATH
+# Only change ownership of directories that need www-data, not the entire project
+sudo chown -R www-data:www-data $PROJECT_PATH/storage $PROJECT_PATH/bootstrap/cache
+# Set permissions faster using xargs instead of exec
+sudo find $PROJECT_PATH -type f -print0 | sudo xargs -0 chmod 644
+sudo find $PROJECT_PATH -type d -print0 | sudo xargs -0 chmod 755
 sudo chmod -R 775 $PROJECT_PATH/storage $PROJECT_PATH/bootstrap/cache
+# Make artisan executable
+sudo chmod +x $PROJECT_PATH/artisan
 print_status "Permissions set"
 
 # Step 10: Restart PHP-FPM (user choice)
