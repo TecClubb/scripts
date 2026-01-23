@@ -92,6 +92,11 @@ fi
 
 cd "$PROJECT_PATH"
 
+# Disable git file mode tracking (prevents permission changes from showing as modifications)
+if [ -d ".git" ]; then
+    git config core.fileMode false
+fi
+
 # Check for uncommitted changes
 if [[ -n $(git status -s) ]]; then
     print_warning "Warning: You have uncommitted changes in the working directory"
@@ -214,26 +219,41 @@ if php artisan list 2>/dev/null | grep -q "horizon:terminate"; then
     fi
 fi
 
-# Step 9: Fix permissions
+# Step 9: Fix permissions (only for directories that need write access)
 print_info "Setting proper permissions..."
+
+# IMPORTANT: We only change permissions on storage and bootstrap/cache
+# Changing permissions on all files causes git to show them as modified!
 
 # Set ownership for web-writable directories only
 sudo chown -R www-data:www-data "$PROJECT_PATH/storage" "$PROJECT_PATH/bootstrap/cache"
 
-# Set directory permissions (755) - excluding .git and vendor for speed
-sudo find "$PROJECT_PATH" -type d -not -path "$PROJECT_PATH/.git/*" -not -path "$PROJECT_PATH/vendor/*" -exec chmod 755 {} \; 2>/dev/null || true
-
-# Set file permissions (644) for app files only - excluding .git and vendor
-sudo find "$PROJECT_PATH" -type f -not -path "$PROJECT_PATH/.git/*" -not -path "$PROJECT_PATH/vendor/*" -exec chmod 644 {} \; 2>/dev/null || true
-
-# Set writable permissions for storage and cache
+# Set writable permissions for storage and cache (the only dirs that need special permissions)
 sudo chmod -R 775 "$PROJECT_PATH/storage" "$PROJECT_PATH/bootstrap/cache"
 
-# Make artisan and any shell scripts executable
-sudo chmod +x "$PROJECT_PATH/artisan"
-sudo find "$PROJECT_PATH" -name "*.sh" -exec chmod +x {} \; 2>/dev/null || true
+# Ensure storage subdirectories exist and are writable
+mkdir -p "$PROJECT_PATH/storage/app/public" 2>/dev/null || true
+mkdir -p "$PROJECT_PATH/storage/framework/cache" 2>/dev/null || true
+mkdir -p "$PROJECT_PATH/storage/framework/sessions" 2>/dev/null || true
+mkdir -p "$PROJECT_PATH/storage/framework/views" 2>/dev/null || true
+mkdir -p "$PROJECT_PATH/storage/logs" 2>/dev/null || true
 
-print_status "Permissions set"
+# Make artisan executable (this is typically already set in the repo)
+sudo chmod +x "$PROJECT_PATH/artisan" 2>/dev/null || true
+
+# Reset any permission changes that git might have tracked
+# This prevents "modified" files from appearing after deployment
+if [ -d "$PROJECT_PATH/.git" ]; then
+    git config core.fileMode false
+    # Reset file permissions to what git expects (without changing content)
+    git diff --name-only 2>/dev/null | while read file; do
+        if [ -f "$file" ]; then
+            git checkout --quiet -- "$file" 2>/dev/null || true
+        fi
+    done
+fi
+
+print_status "Permissions set (storage & cache only)"
 
 # Step 10: Restart PHP-FPM (user choice)
 print_info "PHP-FPM restart is only needed for PHP configuration or OPcache changes"
@@ -248,9 +268,9 @@ if [[ $REPLY =~ ^[Yy]$ ]]; then
         sudo systemctl reload php${PHP_VERSION}-fpm 2>/dev/null && print_status "PHP-FPM reloaded" || print_warning "Could not restart/reload PHP-FPM"
     fi
 else
-    # At minimum, clear OPcache if available
+    # Clear OPcache via PHP if available (doesn't require Laravel package)
     if php -m | grep -qi opcache; then
-        php artisan opcache:clear 2>/dev/null || true
+        php -r "if(function_exists('opcache_reset')) { opcache_reset(); echo 'OPcache cleared'; }" 2>/dev/null || true
     fi
     print_status "PHP-FPM restart skipped"
 fi
