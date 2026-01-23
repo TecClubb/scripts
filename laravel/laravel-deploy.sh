@@ -8,11 +8,13 @@ set -e  # Exit on any error
 # ===============================
 # Configuration
 # ===============================
-PROJECT_PATH="/var/www/safeprovpn"
-BRANCH="main"  # Change to 'master' or your branch name
-PROJECT_NAME="safeprovpn"
-BACKUP_PATH="/var/backups/laravel"
+# Set these variables or pass as arguments
+PROJECT_PATH="${1:-/var/www/safeprovpn}"
+BRANCH="${2:-main}"  # Change to 'master' or your branch name
+PROJECT_NAME=$(basename "$PROJECT_PATH")
+BACKUP_PATH="/var/backups/laravel/${PROJECT_NAME}"
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+PHP_VERSION=$(php -r "echo PHP_MAJOR_VERSION.'.'.PHP_MINOR_VERSION;" 2>/dev/null || echo "8.3")
 
 # Colors for output
 GREEN='\033[0;32m'
@@ -31,20 +33,33 @@ print_info() { echo -e "${BLUE}[ℹ]${NC} $1"; }
 
 # Error handler
 handle_error() {
-    print_error "Deployment failed at step:  $1"
+    print_error "Deployment failed at step: $1"
     print_warning "Rolling back changes..."
     
-    # Restore from backup if exists
-    if [ -d "$BACKUP_PATH/code_$TIMESTAMP" ]; then
-        cd $PROJECT_PATH
-        git reset --hard HEAD@{1} 2>/dev/null || true
-        print_warning "Code rolled back to previous version"
+    # Ensure we're in the project directory
+    cd "$PROJECT_PATH" 2>/dev/null || true
+    
+    # Try to rollback git changes
+    if [ -d "$PROJECT_PATH/.git" ]; then
+        git reset --hard HEAD@{1} 2>/dev/null && print_warning "Code rolled back to previous version" || true
     fi
+    
+    # Restore composer dependencies if vendor backup exists
+    if [ -d "$BACKUP_PATH/vendor_$TIMESTAMP" ]; then
+        rm -rf "$PROJECT_PATH/vendor" 2>/dev/null || true
+        mv "$BACKUP_PATH/vendor_$TIMESTAMP" "$PROJECT_PATH/vendor" 2>/dev/null || true
+        print_warning "Vendor directory restored"
+    fi
+    
+    # Clear any cached config that might be broken
+    php artisan config:clear 2>/dev/null || true
+    php artisan cache:clear 2>/dev/null || true
     
     # Bring site back up
     php artisan up 2>/dev/null || true
     
-    print_error "Deployment aborted.  Please check the logs."
+    print_error "Deployment aborted. Please check the logs."
+    print_info "Log file: $PROJECT_PATH/storage/logs/laravel.log"
     exit 1
 }
 
@@ -60,18 +75,22 @@ echo "   Laravel Deployment Script"
 echo "======================================"
 echo ""
 
-print_info "Project:  $PROJECT_NAME"
+print_info "Project: $PROJECT_NAME"
+print_info "Path: $PROJECT_PATH"
 print_info "Branch: $BRANCH"
+print_info "PHP Version: $PHP_VERSION"
 print_info "Time: $(date)"
 echo ""
 
 # Check if we're in the right directory
 if [ ! -f "$PROJECT_PATH/artisan" ]; then
     print_error "Laravel project not found at $PROJECT_PATH"
+    print_info "Usage: $0 [project_path] [branch]"
+    print_info "Example: $0 /var/www/myapp main"
     exit 1
 fi
 
-cd $PROJECT_PATH
+cd "$PROJECT_PATH"
 
 # Check for uncommitted changes
 if [[ -n $(git status -s) ]]; then
@@ -97,9 +116,14 @@ DB_NAME=$(grep DB_DATABASE .env | cut -d '=' -f2)
 DB_USER=$(grep DB_USERNAME .env | cut -d '=' -f2)
 DB_PASS=$(grep DB_PASSWORD .env | cut -d '=' -f2)
 
-if [ !  -z "$DB_NAME" ]; then
-    mysqldump -u"$DB_USER" -p"$DB_PASS" "$DB_NAME" > "$BACKUP_PATH/db_backup_$TIMESTAMP.sql" 2>/dev/null || print_warning "Database backup failed (continuing anyway)"
-    print_status "Database backed up to: $BACKUP_PATH/db_backup_$TIMESTAMP.sql"
+if [ -n "$DB_NAME" ] && [ -n "$DB_USER" ]; then
+    if mysqldump -u"$DB_USER" -p"$DB_PASS" "$DB_NAME" > "$BACKUP_PATH/db_backup_$TIMESTAMP.sql" 2>/dev/null; then
+        print_status "Database backed up to: $BACKUP_PATH/db_backup_$TIMESTAMP.sql"
+    else
+        print_warning "Database backup failed (continuing anyway)"
+    fi
+else
+    print_warning "Database credentials not found in .env, skipping backup"
 fi
 
 # ===============================
@@ -140,72 +164,124 @@ print_info "Running database migrations..."
 php artisan migrate --force
 print_status "Database migrations completed"
 
-# Step 5: Clear old caches
-print_info "Clearing caches..."
-php artisan config:clear
+# Step 5: Clear all caches
+print_info "Clearing all caches..."
+php artisan optimize:clear
 php artisan cache:clear
-php artisan route:clear
-php artisan view:clear
-php artisan event:clear
 print_status "Caches cleared"
 
-# Step 6: Rebuild optimized caches
+# Step 6: Rebuild optimized caches (config, routes, views, events)
 print_info "Rebuilding optimized caches..."
-php artisan config:cache
-php artisan route:cache
-php artisan view:cache
-php artisan event:cache
+php artisan optimize
 print_status "Caches rebuilt"
 
 # Step 7: Storage link (if needed)
-if [ !  -L "$PROJECT_PATH/public/storage" ]; then
+if [ ! -L "$PROJECT_PATH/public/storage" ]; then
     print_info "Creating storage symlink..."
     php artisan storage:link
     print_status "Storage symlink created"
+else
+    print_status "Storage symlink already exists"
 fi
 
 # Step 8: Reload services (Queue workers, Horizon, Octane, etc.)
 print_info "Reloading services..."
-php artisan reload 2>/dev/null || print_warning "php artisan reload not available (Laravel 11+ only)"
 
-# Alternative: Restart queue workers with Supervisor
+# Try Laravel 11+ reload command first
+if php artisan list 2>/dev/null | grep -q "reload"; then
+    php artisan reload
+    print_status "Services reloaded via artisan"
+else
+    print_info "artisan reload not available, restarting services manually..."
+fi
+
+# Restart queue workers with Supervisor
 if command -v supervisorctl &> /dev/null; then
-    print_info "Restarting Supervisor queue workers..."
-    sudo supervisorctl restart ${PROJECT_NAME}-worker:* 2>/dev/null && print_status "Queue workers restarted" || print_warning "No queue workers found"
+    if supervisorctl status ${PROJECT_NAME}-worker:* &>/dev/null; then
+        print_info "Restarting Supervisor queue workers..."
+        sudo supervisorctl restart ${PROJECT_NAME}-worker:* 2>/dev/null && print_status "Queue workers restarted" || print_warning "Failed to restart queue workers"
+    else
+        print_info "No Supervisor queue workers configured for this project"
+    fi
+fi
+
+# Restart Horizon if running
+if php artisan list 2>/dev/null | grep -q "horizon:terminate"; then
+    if pgrep -f "horizon" > /dev/null; then
+        print_info "Terminating Horizon workers..."
+        php artisan horizon:terminate
+        print_status "Horizon workers will restart automatically"
+    fi
 fi
 
 # Step 9: Fix permissions
 print_info "Setting proper permissions..."
-# Only change ownership of directories that need www-data, not the entire project
-sudo chown -R www-data:www-data $PROJECT_PATH/storage $PROJECT_PATH/bootstrap/cache
-# Set permissions faster using xargs instead of exec
-sudo find $PROJECT_PATH -type f -print0 | sudo xargs -0 chmod 644
-sudo find $PROJECT_PATH -type d -print0 | sudo xargs -0 chmod 755
-sudo chmod -R 775 $PROJECT_PATH/storage $PROJECT_PATH/bootstrap/cache
-# Make artisan executable
-sudo chmod +x $PROJECT_PATH/artisan
+
+# Set ownership for web-writable directories only
+sudo chown -R www-data:www-data "$PROJECT_PATH/storage" "$PROJECT_PATH/bootstrap/cache"
+
+# Set directory permissions (755) - excluding .git and vendor for speed
+sudo find "$PROJECT_PATH" -type d -not -path "$PROJECT_PATH/.git/*" -not -path "$PROJECT_PATH/vendor/*" -exec chmod 755 {} \; 2>/dev/null || true
+
+# Set file permissions (644) for app files only - excluding .git and vendor
+sudo find "$PROJECT_PATH" -type f -not -path "$PROJECT_PATH/.git/*" -not -path "$PROJECT_PATH/vendor/*" -exec chmod 644 {} \; 2>/dev/null || true
+
+# Set writable permissions for storage and cache
+sudo chmod -R 775 "$PROJECT_PATH/storage" "$PROJECT_PATH/bootstrap/cache"
+
+# Make artisan and any shell scripts executable
+sudo chmod +x "$PROJECT_PATH/artisan"
+sudo find "$PROJECT_PATH" -name "*.sh" -exec chmod +x {} \; 2>/dev/null || true
+
 print_status "Permissions set"
 
 # Step 10: Restart PHP-FPM (user choice)
-print_info "PHP-FPM restart is only needed for PHP configuration changes"
-read -p "Restart PHP-FPM? (y/n): " -n 1 -r
+print_info "PHP-FPM restart is only needed for PHP configuration or OPcache changes"
+read -p "Restart PHP-FPM? (y/n) [default: n]: " -n 1 -r
 echo
 if [[ $REPLY =~ ^[Yy]$ ]]; then
-    print_info "Restarting PHP-FPM..."
-    PHP_VERSION=$(php -r "echo PHP_MAJOR_VERSION.'.'.PHP_MINOR_VERSION;")
-    sudo systemctl restart php${PHP_VERSION}-fpm 2>/dev/null && print_status "PHP-FPM restarted" || print_warning "Could not restart PHP-FPM"
+    print_info "Restarting PHP-FPM (version $PHP_VERSION)..."
+    if sudo systemctl restart php${PHP_VERSION}-fpm 2>/dev/null; then
+        print_status "PHP-FPM restarted"
+    else
+        # Try reloading instead (graceful)
+        sudo systemctl reload php${PHP_VERSION}-fpm 2>/dev/null && print_status "PHP-FPM reloaded" || print_warning "Could not restart/reload PHP-FPM"
+    fi
 else
+    # At minimum, clear OPcache if available
+    if php -m | grep -qi opcache; then
+        php artisan opcache:clear 2>/dev/null || true
+    fi
     print_status "PHP-FPM restart skipped"
 fi
 
 # Step 11: Test application health
 print_info "Testing application health..."
-HTTP_CODE=$(curl -o /dev/null -s -w "%{http_code}" http://localhost 2>/dev/null || echo "000")
-if [ "$HTTP_CODE" = "503" ] || [ "$HTTP_CODE" = "200" ]; then
-    print_status "Application responding (HTTP $HTTP_CODE)"
-else
-    print_warning "Unexpected HTTP code: $HTTP_CODE"
+
+# Try to get the APP_URL from .env for accurate health check
+APP_URL=$(grep -E "^APP_URL=" .env | cut -d '=' -f2 | tr -d '"' | tr -d "'")
+HEALTH_URL="${APP_URL:-http://localhost}"
+
+# First check if the /up health route exists (Laravel 10+)
+HTTP_CODE=$(curl -o /dev/null -s -w "%{http_code}" --max-time 10 "${HEALTH_URL}/up" 2>/dev/null || echo "000")
+
+if [ "$HTTP_CODE" = "000" ]; then
+    # Fallback to localhost if APP_URL didn't work
+    HTTP_CODE=$(curl -o /dev/null -s -w "%{http_code}" --max-time 10 "http://127.0.0.1/up" 2>/dev/null || echo "000")
 fi
+
+if [ "$HTTP_CODE" = "000" ]; then
+    # Try root URL
+    HTTP_CODE=$(curl -o /dev/null -s -w "%{http_code}" --max-time 10 "http://127.0.0.1" 2>/dev/null || echo "000")
+fi
+
+case "$HTTP_CODE" in
+    200) print_status "Application is healthy (HTTP 200)" ;;
+    503) print_warning "Application in maintenance mode (HTTP 503) - will be live after artisan up" ;;
+    302|301) print_status "Application responding with redirect (HTTP $HTTP_CODE)" ;;
+    000) print_warning "Could not connect to application (this may be normal if using custom domain)" ;;
+    *) print_warning "Unexpected HTTP code: $HTTP_CODE (application may still work)" ;;
+esac
 
 # Step 12: Disable maintenance mode
 print_info "Disabling maintenance mode..."
@@ -221,23 +297,29 @@ print_status "Deployment completed successfully!"
 echo "======================================"
 echo ""
 print_info "Summary:"
-print_info "  • Previous commit: $CURRENT_COMMIT"
-print_info "  • New commit: $NEW_COMMIT"
-print_info "  • Database backup: $BACKUP_PATH/db_backup_$TIMESTAMP.sql"
+print_info "  • Project: $PROJECT_NAME"
+print_info "  • Previous commit: ${CURRENT_COMMIT:0:8}"
+print_info "  • New commit: ${NEW_COMMIT:0:8}"
+if [ -f "$BACKUP_PATH/db_backup_$TIMESTAMP.sql" ]; then
+    print_info "  • Database backup: $BACKUP_PATH/db_backup_$TIMESTAMP.sql"
+fi
 print_info "  • Deployment time: $(date)"
 echo ""
-print_status "Your application is now live with the latest changes!  🚀"
+print_status "Your application is now live! 🚀"
 echo ""
 
 # Optional: Clean old backups (keep last 10)
 print_info "Cleaning old backups..."
-cd $BACKUP_PATH
-ls -t db_backup_*.sql 2>/dev/null | tail -n +11 | xargs rm -f 2>/dev/null || true
-print_status "Old backups cleaned (kept last 10)"
+if [ -d "$BACKUP_PATH" ]; then
+    cd "$BACKUP_PATH"
+    ls -t db_backup_*.sql 2>/dev/null | tail -n +11 | xargs rm -f 2>/dev/null || true
+    print_status "Old backups cleaned (kept last 10)"
+fi
 
 echo ""
 print_info "Useful commands:"
 echo "  • View logs: tail -f $PROJECT_PATH/storage/logs/laravel.log"
 echo "  • Check queue: php artisan queue:work --once"
 echo "  • View schedule: php artisan schedule:list"
+echo "  • Rollback: cd $PROJECT_PATH && git reset --hard HEAD~1"
 echo ""

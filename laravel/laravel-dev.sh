@@ -1,100 +1,15 @@
 #!/bin/bash
 
-# Laravel Project Auto-installer Script (Private Repo Supported)
-# Installs Laravel, PHP 8.2/8.3/8.4, Nginx, MySQL, Certbot
-# Supports cloning private GitHub repos with PAT/SSH authentication
-# Works on fresh VPS servers - installs all required dependencies
+# Laravel Project Development Auto-installer Script (Private Repo Supported)
+# Installs Laravel, PHP 8.3, Nginx, MySQL, Certbot
+# Supports cloning private GitHub repos with PAT authentication
+# Optimized for development environments
 
 set -e
 
 # ===============================
-# Colors for terminal output
-# ===============================
-GREEN='\033[0;32m'
-RED='\033[0;31m'
-YELLOW='\033[0;33m'
-BLUE='\033[0;34m'
-NC='\033[0m'
-
-print_status() { echo -e "${GREEN}[INFO]${NC} $1"; }
-print_error() { echo -e "${RED}[ERROR]${NC} $1"; }
-print_warning() { echo -e "${YELLOW}[WARNING]${NC} $1"; }
-print_section() { echo -e "\n${BLUE}=== $1 ===${NC}\n"; }
-
-# ===============================
-# Pre-flight Checks & Base Dependencies
-# ===============================
-print_section "Pre-flight Checks"
-
-# Must run as root
-if [[ $EUID -ne 0 ]]; then
-   print_error "This script must be run as root. Try using sudo."
-   exit 1
-fi
-
-# Detect OS
-if [ -f /etc/os-release ]; then
-    . /etc/os-release
-    OS=$NAME
-    OS_VERSION=$VERSION_ID
-else
-    print_error "Cannot detect OS. This script requires Ubuntu/Debian."
-    exit 1
-fi
-
-print_status "Detected OS: $OS $OS_VERSION"
-
-# Check if Ubuntu/Debian
-if [[ ! "$OS" =~ (Ubuntu|Debian) ]]; then
-    print_warning "This script is designed for Ubuntu/Debian. Proceeding anyway..."
-fi
-
-# ===============================
-# Install Base Dependencies First
-# ===============================
-print_section "Installing Base Dependencies"
-
-print_status "Updating package lists..."
-apt-get update -qq
-
-# Essential packages that must be installed first
-BASE_PACKAGES=(
-    "curl"
-    "wget"
-    "git"
-    "unzip"
-    "software-properties-common"
-    "apt-transport-https"
-    "ca-certificates"
-    "gnupg"
-    "lsb-release"
-    "cron"
-)
-
-print_status "Installing essential packages..."
-for pkg in "${BASE_PACKAGES[@]}"; do
-    if ! dpkg -l | grep -q "^ii  $pkg "; then
-        print_status "Installing $pkg..."
-        apt-get install -y $pkg -qq
-    else
-        print_status "$pkg is already installed"
-    fi
-done
-
-# Ensure cron service is running
-print_status "Ensuring cron service is enabled and running..."
-systemctl enable cron 2>/dev/null || true
-systemctl start cron 2>/dev/null || true
-if systemctl is-active --quiet cron; then
-    print_status "Cron service is running"
-else
-    print_warning "Cron service may not be running properly"
-fi
-
-# ===============================
 # User Input Section
 # ===============================
-print_section "Configuration"
 
 # PHP Version Selection
 echo "Select PHP Version:"
@@ -111,13 +26,13 @@ case $PHP_CHOICE in
     *) PHP_VERSION="8.3" ;;
 esac
 
-print_status "Selected PHP version: $PHP_VERSION"
+echo -e "\033[0;32m[INFO]\033[0m Selected PHP version: $PHP_VERSION"
 
 # Project Configuration
 read -p "Enter Project Name [default: laravel-app]: " PROJECT_NAME
 PROJECT_NAME=${PROJECT_NAME:-laravel-app}
 
-read -p "Enter Server Domain(s) (comma-separated for multiple, e.g., example.com,www.example.com): " SERVER_DOMAINS_INPUT
+read -p "Enter Server Domain(s) (comma-separated for multiple, e.g., test.example.com,www.test.example.com): " SERVER_DOMAINS_INPUT
 if [ -z "$SERVER_DOMAINS_INPUT" ]; then
     echo "Error: At least one domain is required."
     exit 1
@@ -152,8 +67,8 @@ if [ ${#DOMAIN_ARRAY[@]} -gt 1 ]; then
 fi
 
 # Database Configuration
-read -p "Enter Database Name [default: laravel_db]: " DB_NAME
-DB_NAME=${DB_NAME:-laravel_db}
+read -p "Enter Database Name [default: laravel_dev]: " DB_NAME
+DB_NAME=${DB_NAME:-laravel_dev}
 
 read -p "Enter Database Username [default: laravel_user]: " DB_USER
 DB_USER=${DB_USER:-laravel_user}
@@ -168,6 +83,7 @@ fi
 read -p "Enter Web Root Directory [default: /var/www]: " WEB_ROOT
 WEB_ROOT=${WEB_ROOT:-/var/www}
 
+# Development: SSL enabled by default for testing domains
 read -p "Enable SSL with Certbot? (y/n) [default: y]: " ENABLE_SSL_INPUT
 ENABLE_SSL_INPUT=${ENABLE_SSL_INPUT:-y}
 if [[ "$ENABLE_SSL_INPUT" =~ ^[Yy]$ ]]; then
@@ -177,20 +93,21 @@ else
 fi
 
 # ===============================
-# Production Environment Setup
+# Development Environment Setup
 # ===============================
 echo ""
-echo "Environment Configuration:"
-read -p "Is this a PRODUCTION deployment? (y/n) [default: y]: " IS_PRODUCTION
-IS_PRODUCTION=${IS_PRODUCTION:-y}
+echo "Development Environment Configuration:"
+APP_ENV="development"
+APP_DEBUG="true"
+echo -e "\033[0;32m[INFO]\033[0m Development mode: APP_ENV=development, APP_DEBUG=true"
 
-if [[ "$IS_PRODUCTION" =~ ^[Yy]$ ]]; then
-    APP_ENV="production"
-    APP_DEBUG="false"
-    echo -e "\033[0;32m[INFO]\033[0m Production mode: APP_ENV=production, APP_DEBUG=false"
-else
-    read -p "Enter APP_ENV [default: local]: " APP_ENV
-    APP_ENV=${APP_ENV:-local}
+# Ask if user wants to override defaults
+read -p "Override default development settings? (y/n) [default: n]: " OVERRIDE_DEV
+OVERRIDE_DEV=${OVERRIDE_DEV:-n}
+
+if [[ "$OVERRIDE_DEV" =~ ^[Yy]$ ]]; then
+    read -p "Enter APP_ENV [default: development]: " APP_ENV
+    APP_ENV=${APP_ENV:-development}
     read -p "Enable APP_DEBUG? (y/n) [default: y]: " APP_DEBUG_INPUT
     APP_DEBUG_INPUT=${APP_DEBUG_INPUT:-y}
     if [[ "$APP_DEBUG_INPUT" =~ ^[Yy]$ ]]; then
@@ -198,7 +115,7 @@ else
     else
         APP_DEBUG="false"
     fi
-    print_status "Development mode: APP_ENV=$APP_ENV, APP_DEBUG=$APP_DEBUG"
+    echo -e "\033[0;32m[INFO]\033[0m Custom mode: APP_ENV=$APP_ENV, APP_DEBUG=$APP_DEBUG"
 fi
 
 # ===============================
@@ -217,10 +134,10 @@ if [ "$GIT_METHOD" = "1" ]; then
     
     # Verify SSH key exists
     if [ ! -f ~/.ssh/id_rsa ] && [ ! -f ~/.ssh/id_ed25519 ]; then
-        print_warning "No SSH key found. Generating new SSH key..."
+        echo -e "\033[0;33m[WARNING]\033[0m No SSH key found. Generating new SSH key..."
         read -p "Enter your email for SSH key: " SSH_EMAIL
         ssh-keygen -t ed25519 -C "$SSH_EMAIL" -f ~/.ssh/id_ed25519 -N ""
-        print_status "SSH public key generated. Add this to your GitHub account:"
+        echo -e "\033[0;32m[INFO]\033[0m SSH public key generated. Add this to your GitHub account:"
         cat ~/.ssh/id_ed25519.pub
         read -p "Press Enter after adding the SSH key to GitHub..."
     fi
@@ -240,34 +157,24 @@ else
     [[ "$GITHUB_REPO_URL" != *.git ]] && GITHUB_REPO_URL="${GITHUB_REPO_URL}.git"
 fi
 
-print_status "Repository URL configured"
+echo -e "\033[0;32m[INFO]\033[0m Repository URL configured"
 
 # ===============================
-# Function to extract root domain from subdomain
+# Colors for terminal output
 # ===============================
-# e.g., panel.safeprovpn.com -> safeprovpn.com
-extract_root_domain() {
-    local domain="$1"
-    # Count dots in domain
-    local dot_count=$(echo "$domain" | tr -cd '.' | wc -c)
-    
-    if [ "$dot_count" -ge 2 ]; then
-        # Has subdomain, extract root domain (last two parts)
-        echo "$domain" | rev | cut -d'.' -f1-2 | rev
-    else
-        # Already a root domain
-        echo "$domain"
-    fi
-}
+GREEN='\033[0;32m'
+RED='\033[0;31m'
+YELLOW='\033[0;33m'
+NC='\033[0m'
 
-# ===============================
-# Script logic
-# ===============================
+print_status() { echo -e "${GREEN}[INFO]${NC} $1"; }
+print_error() { echo -e "${RED}[ERROR]${NC} $1"; }
+print_warning() { echo -e "${YELLOW}[WARNING]${NC} $1"; }
 
 # ===============================
 # Verify Repository Access
 # ===============================
-print_section "Verifying Repository Access"
+print_status "Verifying repository access..."
 
 if [ "$GIT_METHOD" = "1" ]; then
     # Test SSH connection to GitHub
@@ -300,45 +207,37 @@ print_status "Repository access verified successfully!"
 echo ""
 
 # ===============================
-# PHP Extensions Required by Laravel 12.x
+# Script logic
 # ===============================
-# From Laravel docs: PHP >= 8.2 with these extensions:
-# Ctype, cURL, DOM, Fileinfo, Filter, Hash, Mbstring, OpenSSL, PCRE, PDO, Session, Tokenizer, XML
-# Note: Many of these are built into PHP core (ctype, fileinfo, filter, hash, openssl, pcre, session, tokenizer)
-# We install the ones that need explicit packages
 
-# Core PHP extensions required for Laravel
-CORE_EXTENSIONS=(
-    "cli"           # Command line interface
-    "fpm"           # FastCGI Process Manager for Nginx
-    "common"        # Common files (includes fileinfo, ctype, etc.)
-    "curl"          # cURL extension
-    "mbstring"      # Multibyte string support
-    "xml"           # XML/DOM extension
-    "dom"           # DOM extension (usually part of xml)
-    "zip"           # ZIP archive support
-    "bcmath"        # BCMath arbitrary precision
-    "mysql"         # MySQL/MariaDB PDO driver
-    "pdo"           # PDO database abstraction (if separate)
-    "tokenizer"     # Tokenizer (usually built-in, but install if available)
-    "opcache"       # OPcache for performance
-)
-
-# Optional PHP extensions (commonly used)
-OPTIONAL_EXTENSIONS=("gd" "intl" "soap" "redis" "memcached" "imagick" "ldap" "imap" "sqlite3" "pgsql" "exif")
-
-print_section "Installing PHP $PHP_VERSION"
-
-# Add PHP repository
-print_status "Adding PHP repository..."
-if ! grep -q "ondrej/php" /etc/apt/sources.list.d/* 2>/dev/null; then
-    add-apt-repository -y ppa:ondrej/php
-    apt-get update -qq
-else
-    print_status "PHP repository already added"
+# Must run as root
+if [[ $EUID -ne 0 ]]; then
+   print_error "This script must be run as root. Try using sudo."
+   exit 1
 fi
 
-print_status "Installing PHP $PHP_VERSION with Laravel required extensions..."
+# Update system
+print_status "Updating system packages..."
+apt-get update
+apt-get upgrade -y
+
+# Add PHP repo
+print_status "Adding PHP repository..."
+apt-get install -y software-properties-common
+add-apt-repository -y ppa:ondrej/php
+apt-get update
+
+# Core PHP extensions required for Laravel
+# Note: json, tokenizer, pdo are built into PHP 8.0+ and should not be installed separately
+CORE_EXTENSIONS=("cli" "common" "curl" "mbstring" "mysql" "xml" "zip" "fpm" "bcmath")
+
+# Development-specific extensions
+DEV_EXTENSIONS=("gd" "intl" "redis" "xdebug")
+
+# Optional PHP extensions
+OPTIONAL_EXTENSIONS=("soap" "memcached" "imagick" "ldap" "imap")
+
+print_status "Installing PHP $PHP_VERSION with core and development extensions..."
 
 # Build core installation command
 PHP_PACKAGES="php${PHP_VERSION}"
@@ -346,23 +245,12 @@ for ext in "${CORE_EXTENSIONS[@]}"; do
     PHP_PACKAGES="$PHP_PACKAGES php${PHP_VERSION}-${ext}"
 done
 
-# Install PHP packages (ignore errors for built-in extensions)
-apt-get install -y $PHP_PACKAGES 2>/dev/null || {
-    print_warning "Some extensions may be built into PHP core, installing individually..."
-    apt-get install -y php${PHP_VERSION} php${PHP_VERSION}-cli php${PHP_VERSION}-fpm php${PHP_VERSION}-common
-    for ext in curl mbstring xml zip bcmath mysql opcache; do
-        apt-get install -y php${PHP_VERSION}-${ext} 2>/dev/null || true
-    done
-}
+# Add development extensions
+for ext in "${DEV_EXTENSIONS[@]}"; do
+    PHP_PACKAGES="$PHP_PACKAGES php${PHP_VERSION}-${ext}"
+done
 
-# Verify PHP installation
-if command -v php &> /dev/null; then
-    INSTALLED_PHP=$(php -v | head -n 1)
-    print_status "PHP installed: $INSTALLED_PHP"
-else
-    print_error "PHP installation failed!"
-    exit 1
-fi
+apt-get install -y $PHP_PACKAGES unzip curl git
 
 # Ask for additional extensions
 echo ""
@@ -372,72 +260,20 @@ read -p "Enter additional extensions to install (space-separated, or press Enter
 if [ ! -z "$EXTRA_EXTENSIONS" ]; then
     print_status "Installing additional PHP extensions..."
     for ext in $EXTRA_EXTENSIONS; do
-        apt-get install -y php${PHP_VERSION}-${ext} 2>/dev/null || print_warning "Extension php${PHP_VERSION}-${ext} not available"
+        apt-get install -y php${PHP_VERSION}-${ext} 2>/dev/null || echo -e "${YELLOW}[WARNING]${NC} Extension php${PHP_VERSION}-${ext} not available"
     done
 fi
 
-# Configure PHP for production
-print_status "Configuring PHP for production..."
-PHP_INI="/etc/php/${PHP_VERSION}/fpm/php.ini"
-if [ -f "$PHP_INI" ]; then
-    # Backup original
-    cp "$PHP_INI" "${PHP_INI}.backup" 2>/dev/null || true
-    
-    # Production optimizations
-    sed -i 's/^expose_php = On/expose_php = Off/' "$PHP_INI" 2>/dev/null || true
-    sed -i 's/^;*upload_max_filesize.*/upload_max_filesize = 100M/' "$PHP_INI" 2>/dev/null || true
-    sed -i 's/^;*post_max_size.*/post_max_size = 100M/' "$PHP_INI" 2>/dev/null || true
-    sed -i 's/^;*memory_limit.*/memory_limit = 256M/' "$PHP_INI" 2>/dev/null || true
-    sed -i 's/^;*max_execution_time.*/max_execution_time = 60/' "$PHP_INI" 2>/dev/null || true
-fi
-
-# ===============================
 # Install Composer
-# ===============================
-print_section "Installing Composer"
+print_status "Installing Composer..."
+curl -sS https://getcomposer.org/installer | php
+mv composer.phar /usr/local/bin/composer
+chmod +x /usr/local/bin/composer
 
-if command -v composer &> /dev/null; then
-    print_status "Composer is already installed"
-    composer --version
-else
-    print_status "Installing Composer..."
-    EXPECTED_CHECKSUM="$(php -r 'copy("https://composer.github.io/installer.sig", "php://stdout");')"
-    php -r "copy('https://getcomposer.org/installer', 'composer-setup.php');"
-    ACTUAL_CHECKSUM="$(php -r "echo hash_file('sha384', 'composer-setup.php');")"
-    
-    if [ "$EXPECTED_CHECKSUM" != "$ACTUAL_CHECKSUM" ]; then
-        print_warning "Composer installer checksum mismatch, installing anyway..."
-    fi
-    
-    php composer-setup.php --quiet
-    rm composer-setup.php
-    mv composer.phar /usr/local/bin/composer
-    chmod +x /usr/local/bin/composer
-    print_status "Composer installed successfully"
-fi
-
-# ===============================
 # Install MySQL
-# ===============================
-print_section "Installing MySQL"
-
-if command -v mysql &> /dev/null; then
-    print_status "MySQL is already installed"
-else
-    print_status "Installing MySQL Server..."
-    apt-get install -y mysql-server
-fi
-
-# Ensure MySQL is running
-systemctl enable mysql 2>/dev/null || systemctl enable mariadb 2>/dev/null || true
-systemctl start mysql 2>/dev/null || systemctl start mariadb 2>/dev/null || true
-
-if systemctl is-active --quiet mysql || systemctl is-active --quiet mariadb; then
-    print_status "MySQL/MariaDB is running"
-else
-    print_error "MySQL failed to start!"
-    exit 1
-fi
+print_status "Installing MySQL..."
+apt-get install -y mysql-server
+systemctl enable --now mysql
 
 # Create database and user
 print_status "Setting up database..."
@@ -458,33 +294,14 @@ else
     exit 1
 fi
 
-# ===============================
-# Install Nginx & Certbot
-# ===============================
-print_section "Installing Nginx & Certbot"
-
-if command -v nginx &> /dev/null; then
-    print_status "Nginx is already installed"
-else
-    print_status "Installing Nginx..."
-    apt-get install -y nginx
-fi
-
-if command -v certbot &> /dev/null; then
-    print_status "Certbot is already installed"
-else
-    print_status "Installing Certbot..."
-    apt-get install -y certbot python3-certbot-nginx
-fi
-
-# Ensure Nginx is running
-systemctl enable nginx 2>/dev/null || true
-systemctl start nginx 2>/dev/null || true
+# Install Nginx
+print_status "Installing Nginx..."
+apt-get install -y nginx
 
 # ===============================
-# Redis Setup
+# Redis Setup (Development)
 # ===============================
-read -p "Install and configure Redis? (y/n) [default: n]: " INSTALL_REDIS
+read -p "Install and configure Redis? (y/n) [default: y]: " INSTALL_REDIS
 REDIS_ENABLED=false
 
 if [[ "$INSTALL_REDIS" =~ ^[Yy]$ ]]; then
@@ -494,10 +311,10 @@ if [[ "$INSTALL_REDIS" =~ ^[Yy]$ ]]; then
     # Install PHP Redis extension if not already installed
     apt-get install -y php${PHP_VERSION}-redis 2>/dev/null || print_status "PHP Redis extension already installed"
     
-    # Configure Redis for production
-    print_status "Configuring Redis..."
+    # Configure Redis for development (more relaxed settings)
+    print_status "Configuring Redis for development..."
     sed -i 's/^supervised no/supervised systemd/' /etc/redis/redis.conf
-    sed -i 's/^# maxmemory <bytes>/maxmemory 256mb/' /etc/redis/redis.conf
+    sed -i 's/^# maxmemory <bytes>/maxmemory 512mb/' /etc/redis/redis.conf
     sed -i 's/^# maxmemory-policy noeviction/maxmemory-policy allkeys-lru/' /etc/redis/redis.conf
     
     systemctl enable redis-server
@@ -505,26 +322,15 @@ if [[ "$INSTALL_REDIS" =~ ^[Yy]$ ]]; then
     
     REDIS_ENABLED=true
     
-    # Ask what to use Redis for
-    echo ""
-    echo "Configure Redis for:"
-    read -p "  Use Redis for Cache? (y/n) [default: y]: " REDIS_CACHE
-    REDIS_CACHE=${REDIS_CACHE:-y}
+    # Default Redis settings for development
+    REDIS_CACHE="y"
+    REDIS_QUEUE="y"
+    REDIS_SESSION="y"
     
-    read -p "  Use Redis for Queue? (y/n) [default: y]: " REDIS_QUEUE
-    REDIS_QUEUE=${REDIS_QUEUE:-y}
-    
-    read -p "  Use Redis for Sessions? (y/n) [default: y]: " REDIS_SESSION
-    REDIS_SESSION=${REDIS_SESSION:-y}
-    
-    print_status "Redis installed and configured!"
+    print_status "Redis installed and configured for development!"
 fi
 
-# ===============================
-# Clone Repository
-# ===============================
-print_section "Cloning Repository"
-
+# Clone repo
 print_status "Cloning your GitHub repository..."
 mkdir -p $WEB_ROOT
 cd $WEB_ROOT
@@ -532,14 +338,10 @@ rm -rf $PROJECT_NAME 2>/dev/null || true
 git clone $GITHUB_REPO_URL $PROJECT_NAME
 cd $PROJECT_NAME
 
-# ===============================
-# Laravel Setup
-# ===============================
-print_section "Setting Up Laravel"
-
-print_status "Installing Laravel dependencies..."
+# Laravel setup (Development - includes dev dependencies)
+print_status "Installing Laravel dependencies with dev packages..."
 export COMPOSER_ALLOW_SUPERUSER=1
-composer install --no-interaction --prefer-dist --optimize-autoloader --no-dev
+composer install --no-interaction --prefer-dist --optimize-autoloader
 
 # Permissions
 print_status "Setting up file permissions..."
@@ -586,13 +388,11 @@ sed -i "s|DB_DATABASE=.*|DB_DATABASE=$ESC_DB_NAME|g" .env
 sed -i "s|DB_USERNAME=.*|DB_USERNAME=$ESC_DB_USER|g" .env
 sed -i "s|DB_PASSWORD=.*|DB_PASSWORD=$ESC_DB_PASSWORD|g" .env
 
-# Additional production optimizations
-if [[ "$IS_PRODUCTION" =~ ^[Yy]$ ]]; then
-    print_status "Applying production optimizations..."
-    # Set log channel to daily for production
-    sed -i "s|LOG_CHANNEL=.*|LOG_CHANNEL=daily|g" .env
-    sed -i "s|LOG_LEVEL=.*|LOG_LEVEL=warning|g" .env
-fi
+# Development-specific settings
+print_status "Applying development configurations..."
+# Set log channel to daily for development
+sed -i "s|LOG_CHANNEL=.*|LOG_CHANNEL=daily|g" .env
+sed -i "s|LOG_LEVEL=.*|LOG_LEVEL=debug|g" .env
 
 # Configure Redis in .env if enabled
 if [ "$REDIS_ENABLED" = true ]; then
@@ -631,16 +431,18 @@ print_status "Creating storage symbolic link..."
 php artisan storage:link
 
 print_status "Running database migrations..."
-php artisan migrate --force
+php artisan migrate
 
-read -p "Run database seeders? (y/n) [default: n]: " RUN_SEEDERS
+# Development: always ask about seeders
+read -p "Run database seeders? (y/n) [default: y]: " RUN_SEEDERS
+RUN_SEEDERS=${RUN_SEEDERS:-y}
 if [[ "$RUN_SEEDERS" =~ ^[Yy]$ ]]; then
     print_status "Running database seeders..."
-    php artisan db:seed --force
+    php artisan db:seed
 fi
 
 # ===============================
-# Queue & Scheduler Setup
+# Queue & Scheduler Setup (Development)
 # ===============================
 read -p "Set up Laravel Queue Workers with Supervisor? (y/n) [default: n]: " SETUP_QUEUE
 read -p "Set up Laravel Scheduler (cron job)? (y/n) [default: n]: " SETUP_SCHEDULER
@@ -663,8 +465,8 @@ if [[ "$SETUP_QUEUE" =~ ^[Yy]$ ]]; then
         supervisorctl update 2>/dev/null || true
     fi
     
-    read -p "Enter number of queue workers [default: 2]: " NUM_WORKERS
-    NUM_WORKERS=${NUM_WORKERS:-2}
+    read -p "Enter number of queue workers [default: 3]: " NUM_WORKERS
+    NUM_WORKERS=${NUM_WORKERS:-3}
     
     # Determine default queue connection based on Redis setup
     if [ "$REDIS_ENABLED" = true ] && [[ "$REDIS_QUEUE" =~ ^[Yy]$ ]]; then
@@ -706,7 +508,7 @@ EOF
             print_status "Creating queue tables..."
             cd ${WEB_ROOT}/${PROJECT_NAME}
             php artisan queue:table 2>/dev/null || print_warning "Queue migration already exists"
-            php artisan migrate --force
+            php artisan migrate
         else
             print_status "Skipping queue table creation"
         fi
@@ -723,80 +525,23 @@ fi
 if [[ "$SETUP_SCHEDULER" =~ ^[Yy]$ ]]; then
     print_status "Setting up Laravel Scheduler..."
     
-    # Ensure cron is installed and running
-    if ! command -v crontab &> /dev/null; then
-        print_status "Installing cron..."
-        apt-get install -y cron
-    fi
+    # Clean up old cron jobs for this project first
+    print_status "Cleaning up old scheduler entries..."
+    EXISTING_CRON=$(crontab -u www-data -l 2>/dev/null || echo "")
     
-    # Enable and start cron service
-    systemctl enable cron 2>/dev/null || true
-    systemctl start cron 2>/dev/null || true
-    
-    # Verify cron is running
-    if ! systemctl is-active --quiet cron; then
-        print_warning "Cron service is not running, attempting to start..."
-        service cron start 2>/dev/null || /etc/init.d/cron start 2>/dev/null || true
-    fi
-    
-    # Define the cron command
+    # Add cron job for Laravel scheduler
     CRON_COMMAND="* * * * * cd ${WEB_ROOT}/${PROJECT_NAME} && php artisan schedule:run >> /dev/null 2>&1"
     
-    # Create www-data crontab properly
-    print_status "Setting up cron job for www-data user..."
+    # Remove old entries for this project and add new one
+    (echo "$EXISTING_CRON" | grep -v "${WEB_ROOT}/${PROJECT_NAME}/artisan schedule:run" | grep -v "^$"; echo "$CRON_COMMAND") | crontab -u www-data -
     
-    # Method 1: Direct crontab manipulation (most reliable)
-    # First, ensure www-data has a valid shell for cron
-    
-    # Get existing crontab for www-data (if any)
-    EXISTING_CRON=$(crontab -l -u www-data 2>/dev/null || echo "")
-    
-    # Check if the cron job already exists
-    if echo "$EXISTING_CRON" | grep -qF "${WEB_ROOT}/${PROJECT_NAME}"; then
-        print_status "Scheduler cron job already exists, updating..."
-        # Remove old entry for this project
-        EXISTING_CRON=$(echo "$EXISTING_CRON" | grep -v "${WEB_ROOT}/${PROJECT_NAME}" || echo "")
-    fi
-    
-    # Create new crontab content
-    NEW_CRON=$(echo -e "${EXISTING_CRON}\n${CRON_COMMAND}" | grep -v "^$" | sort -u)
-    
-    # Write the crontab
-    echo "$NEW_CRON" | crontab -u www-data -
-    
-    # Verify the crontab was set
-    if crontab -l -u www-data 2>/dev/null | grep -qF "${WEB_ROOT}/${PROJECT_NAME}"; then
-        print_status "Laravel Scheduler cron job added successfully!"
-    else
-        print_warning "Failed to add cron job via crontab command, trying alternative method..."
-        
-        # Method 2: Write to cron.d directory (alternative)
-        CRON_FILE="/etc/cron.d/${PROJECT_NAME}-scheduler"
-        echo "# Laravel Scheduler for ${PROJECT_NAME}" > "$CRON_FILE"
-        echo "SHELL=/bin/bash" >> "$CRON_FILE"
-        echo "PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin" >> "$CRON_FILE"
-        echo "* * * * * www-data cd ${WEB_ROOT}/${PROJECT_NAME} && php artisan schedule:run >> /dev/null 2>&1" >> "$CRON_FILE"
-        chmod 644 "$CRON_FILE"
-        
-        print_status "Created cron file at: $CRON_FILE"
-    fi
-    
-    # Restart cron to ensure changes take effect
-    systemctl restart cron 2>/dev/null || service cron restart 2>/dev/null || /etc/init.d/cron restart 2>/dev/null || true
-    
+    print_status "Laravel Scheduler configured! Cron job added for www-data user."
     print_status "Current crontab for www-data:"
-    crontab -l -u www-data 2>/dev/null || echo "(checking /etc/cron.d/)"
-    
-    if [ -f "/etc/cron.d/${PROJECT_NAME}-scheduler" ]; then
-        print_status "Cron file content:"
-        cat "/etc/cron.d/${PROJECT_NAME}-scheduler"
-    fi
+    crontab -u www-data -l 2>/dev/null || echo "(empty)"
 fi
 
-# ===============================
 # Configure Nginx
-# ===============================
-print_section "Configuring Nginx"
+print_status "Configuring Nginx..."
 
 # Clean up old/conflicting Nginx configurations
 print_status "Cleaning up old Nginx configurations..."
@@ -810,7 +555,6 @@ done
 # Build server_name directive with all domains
 ALL_DOMAINS=$(IFS=' '; echo "${DOMAIN_ARRAY[*]}")
 
-# Create optimized Nginx configuration (based on production-tested config)
 cat > /etc/nginx/sites-available/$PROJECT_NAME <<EOF
 server {
     listen 80;
@@ -818,39 +562,16 @@ server {
     server_name ${ALL_DOMAINS};
     root $WEB_ROOT/$PROJECT_NAME/public;
 
-    index index.php index.html;
-    
-    # Security headers
-    add_header X-Frame-Options "SAMEORIGIN" always;
-    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-Frame-Options "SAMEORIGIN";
+    add_header X-Content-Type-Options "nosniff";
+
+    index index.php;
+
+    charset utf-8;
     
     # Upload size limit
     client_max_body_size 100M;
 
-    charset utf-8;
-
-    # Livewire routes - always go through Laravel (must be before static assets)
-    location ^~ /livewire/ {
-        try_files \$uri \$uri/ /index.php?\$query_string;
-    }
-
-    # Static assets with CORS support
-    location ~* \.(?:css|js|gif|png|jpg|jpeg|webp|ico|cur|bmp|svg|woff2|woff|ttf|eot|otf)$ {
-        add_header 'Access-Control-Allow-Origin' '*' always;
-        add_header 'Access-Control-Allow-Methods' 'GET, OPTIONS' always;
-        add_header 'Access-Control-Allow-Headers' '*' always;
-        add_header 'Access-Control-Max-Age' '86400' always;
-        expires 1M;
-        access_log off;
-        try_files \$uri =404;
-    }
-
-    # Allow /logs routes to go through Laravel
-    location ~ ^/logs/ {
-        try_files \$uri \$uri/ /index.php?\$query_string;
-    }
-
-    # Main location block
     location / {
         try_files \$uri \$uri/ /index.php?\$query_string;
     }
@@ -860,7 +581,6 @@ server {
 
     error_page 404 /index.php;
 
-    # PHP-FPM configuration
     location ~ ^/index\.php(/|$) {
         fastcgi_pass unix:/var/run/php/php${PHP_VERSION}-fpm.sock;
         fastcgi_param SCRIPT_FILENAME \$realpath_root\$fastcgi_script_name;
@@ -868,24 +588,8 @@ server {
         fastcgi_hide_header X-Powered-By;
     }
 
-    # Block hidden files (except .well-known for SSL verification)
     location ~ /\.(?!well-known).* {
         deny all;
-        access_log off;
-        log_not_found off;
-    }
-
-    # Block sensitive files (but allow Laravel routes like /api/logs)
-    location ~* \.(env|log|ini|sql|bak|old|sh)$ {
-        # Allow /logs and /api prefixes to go through Laravel
-        location ~ ^/(logs|api)/ {
-            try_files \$uri \$uri/ /index.php?\$query_string;
-        }
-        
-        # Block all other direct file access
-        deny all;
-        access_log off;
-        log_not_found off;
     }
 }
 EOF
@@ -915,9 +619,12 @@ fi
 
 print_status "Nginx is running successfully!"
 
-# SSL setup
+# SSL setup (Development - optional but enabled by default)
 if [ "$ENABLE_SSL" = true ]; then
     print_status "Setting up SSL with Certbot for domains: $ALL_DOMAINS"
+    
+    # Install Certbot if not already installed
+    apt-get install -y certbot python3-certbot-nginx
     
     # Build domain arguments for certbot
     CERTBOT_DOMAINS=""
@@ -942,61 +649,36 @@ if [ "$ENABLE_SSL" = true ]; then
             
             # Test SSL auto-renew
             print_status "Testing SSL auto-renew..."
-            certbot renew --dry-run || print_warning "SSL auto-renew test failed, but certificates are installed"
+            certbot renew --dry-run || echo -e "${YELLOW}[WARNING]${NC} SSL auto-renew test failed, but certificates are installed"
         else
-            print_warning "SSL certificate directory not found, but Certbot reported success"
+            echo -e "${YELLOW}[WARNING]${NC} SSL certificate directory not found, but Certbot reported success"
         fi
     else
-        print_warning "SSL certificate installation failed!"
-        print_warning "Your site is accessible via HTTP only."
-        print_warning "Common causes:"
-        print_warning "  1. DNS not pointing to this server yet"
-        print_warning "  2. Port 80 not accessible from internet"
-        print_warning "  3. Firewall blocking connections"
-        print_warning "You can retry SSL setup later with:"
-        print_warning "  certbot --nginx -d ${ALL_DOMAINS// / -d }"
+        echo -e "${YELLOW}[WARNING]${NC} SSL certificate installation failed!"
+        echo -e "${YELLOW}[WARNING]${NC} Your site is accessible via HTTP only."
+        echo -e "${YELLOW}[WARNING]${NC} Common causes:"
+        echo -e "${YELLOW}[WARNING]${NC}   1. DNS not pointing to this server yet"
+        echo -e "${YELLOW}[WARNING]${NC}   2. Port 80 not accessible from internet"
+        echo -e "${YELLOW}[WARNING]${NC}   3. Firewall blocking connections"
+        echo -e "${YELLOW}[WARNING]${NC} You can retry SSL setup later with:"
+        echo -e "${YELLOW}[WARNING]${NC}   certbot --nginx -d ${ALL_DOMAINS// / -d }"
         ENABLE_SSL=false
     fi
 fi
 
 # Restart PHP-FPM
-print_status "Configuring PHP-FPM..."
 systemctl enable php${PHP_VERSION}-fpm
 systemctl restart php${PHP_VERSION}-fpm
 
-# Verify PHP-FPM is running
-if systemctl is-active --quiet php${PHP_VERSION}-fpm; then
-    print_status "PHP-FPM is running"
-else
-    print_error "PHP-FPM failed to start!"
-    exit 1
-fi
-
-# ===============================
-# Laravel Optimization
-# ===============================
-print_section "Optimizing Laravel"
-
-# Clear any existing caches first
-print_status "Clearing existing caches..."
-php artisan optimize:clear 2>/dev/null || true
-
-# Run Laravel's optimize command (combines config:cache, route:cache, view:cache, event:cache)
-print_status "Running Laravel optimization..."
-php artisan optimize
-
-# Additional production optimizations
-if [[ "$IS_PRODUCTION" =~ ^[Yy]$ ]]; then
-    print_status "Running additional production optimizations..."
-    
-    # Composer optimization (already done during install, but ensure autoloader is optimized)
-    composer dump-autoload --optimize --no-dev 2>/dev/null || true
-fi
-
-print_status "Laravel optimization complete!"
+# Development: Skip optimization caches for easier debugging
+print_status "Clearing Laravel caches for development..."
+php artisan config:clear
+php artisan route:clear
+php artisan view:clear
+php artisan cache:clear
 
 print_status "====================================================="
-print_status "Installation completed successfully!"
+print_status "Development installation completed successfully!"
 print_status "====================================================="
 print_status "Access your Laravel app at:"
 for domain in "${DOMAIN_ARRAY[@]}"; do
@@ -1011,6 +693,7 @@ if [ ! -z "$ROOT_DOMAIN" ]; then
     print_status ""
     print_status "APP_URL: $FINAL_APP_URL"
 fi
+
 print_status ""
 print_status "Environment: $APP_ENV (DEBUG: $APP_DEBUG)"
 
@@ -1022,6 +705,8 @@ if [ "$REDIS_ENABLED" = true ]; then
     [[ "$REDIS_SESSION" =~ ^[Yy]$ ]] && print_status "  - Session: Redis"
     print_status "  - Status: systemctl status redis-server"
 fi
+
+print_status ""
 print_status "Database Details:"
 print_status "  Name: $DB_NAME"
 print_status "  User: $DB_USER"
@@ -1042,17 +727,12 @@ if [[ "$SETUP_SCHEDULER" =~ ^[Yy]$ ]]; then
     print_status ""
     print_status "Laravel Scheduler: Enabled"
     print_status "  Cron: Every minute as www-data user"
-    print_status "  Verify: crontab -l -u www-data"
-    if [ -f "/etc/cron.d/${PROJECT_NAME}-scheduler" ]; then
-        print_status "  Cron File: /etc/cron.d/${PROJECT_NAME}-scheduler"
-    fi
 fi
 
 print_status ""
-print_status "Useful Commands:"
-print_status "  - Restart PHP-FPM: systemctl restart php${PHP_VERSION}-fpm"
-print_status "  - Restart Nginx: systemctl restart nginx"
-print_status "  - View Laravel logs: tail -f $WEB_ROOT/$PROJECT_NAME/storage/logs/laravel.log"
-print_status "  - Clear all caches: cd $WEB_ROOT/$PROJECT_NAME && php artisan optimize:clear"
-print_status "  - Re-optimize: cd $WEB_ROOT/$PROJECT_NAME && php artisan optimize"
+print_status "Development Tips:"
+print_status "  - Caches are cleared for easier debugging"
+print_status "  - Xdebug is installed for debugging"
+print_status "  - Logs are set to debug level"
+print_status "  - Run 'php artisan serve' for local development server"
 print_status "====================================================="
