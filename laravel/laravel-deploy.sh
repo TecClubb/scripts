@@ -3,7 +3,8 @@
 # Laravel Deployment Script
 # Safely deploys new code with automatic rollback on failure
 
-set -e  # Exit on any error
+# Temporarily disable exit on error for debugging
+# set -e  # Exit on any error
 
 # ===============================
 # Configuration
@@ -41,7 +42,9 @@ handle_error() {
     
     # Try to rollback git changes
     if [ -d "$PROJECT_PATH/.git" ]; then
-        git reset --hard HEAD@{1} 2>/dev/null && print_warning "Code rolled back to previous version" || true
+        git reset --hard HEAD@{1} 2>/dev/null && print_warning "Code rolled back to previous version" || print_warning "Could not rollback git changes"
+    else
+        print_warning "Not a git repository, cannot rollback code changes"
     fi
     
     # Restore composer dependencies if vendor backup exists
@@ -90,12 +93,33 @@ if [ ! -f "$PROJECT_PATH/artisan" ]; then
     exit 1
 fi
 
-cd "$PROJECT_PATH"
+# Change to project directory
+print_info "Changing to directory: $PROJECT_PATH"
+cd "$PROJECT_PATH" || {
+    print_error "Failed to change to directory: $PROJECT_PATH"
+    exit 1
+}
+
+# Debug: Show current directory and git status
+print_info "Current directory: $(pwd)"
+print_info "Checking for .git directory..."
+
+# Check if this is a git repository
+if [ ! -d ".git" ]; then
+    print_error "This directory is not a git repository"
+    print_info "Please initialize git or deploy from a git repository"
+    print_info "Directory contents:"
+    ls -la | head -10
+    exit 1
+fi
+
+print_status "Git repository found"
 
 # Disable git file mode tracking (prevents permission changes from showing as modifications)
-if [ -d ".git" ]; then
-    git config core.fileMode false
-fi
+# Use || true to prevent script exit if this fails
+git config core.fileMode false || {
+    print_warning "Could not set git config (continuing anyway)"
+}
 
 # Check for uncommitted changes
 if [[ -n $(git status -s) ]]; then
@@ -144,6 +168,13 @@ print_status "Maintenance mode enabled"
 print_info "Pulling latest code from GitHub..."
 CURRENT_COMMIT=$(git rev-parse HEAD)
 print_info "Current commit: $CURRENT_COMMIT"
+
+# Check if remote exists before trying to fetch
+if ! git remote get-url origin &>/dev/null; then
+    print_error "No 'origin' remote configured"
+    print_info "Please add a remote: git remote add origin <repository-url>"
+    exit 1
+fi
 
 git fetch origin $BRANCH
 git pull origin $BRANCH
@@ -243,15 +274,13 @@ sudo chmod +x "$PROJECT_PATH/artisan" 2>/dev/null || true
 
 # Reset any permission changes that git might have tracked
 # This prevents "modified" files from appearing after deployment
-if [ -d "$PROJECT_PATH/.git" ]; then
-    git config core.fileMode false
-    # Reset file permissions to what git expects (without changing content)
-    git diff --name-only 2>/dev/null | while read file; do
-        if [ -f "$file" ]; then
-            git checkout --quiet -- "$file" 2>/dev/null || true
-        fi
-    done
-fi
+git config core.fileMode false
+# Reset file permissions to what git expects (without changing content)
+git diff --name-only 2>/dev/null | while read file; do
+    if [ -f "$file" ]; then
+        git checkout --quiet -- "$file" 2>/dev/null || true
+    fi
+done
 
 print_status "Permissions set (storage & cache only)"
 

@@ -193,6 +193,11 @@ php artisan optimize:clear
 php artisan cache:clear
 print_status "All caches cleared (development mode - no caching)"
 
+# Step 6.1: Optimize caches for better performance
+print_info "Optimizing caches..."
+php artisan optimize
+print_status "Cache optimization completed"
+
 # Step 7: Storage link (if needed)
 if [ ! -L "$PROJECT_PATH/public/storage" ]; then
     print_info "Creating storage symlink..."
@@ -202,7 +207,7 @@ else
     print_status "Storage symlink already exists"
 fi
 
-# Step 8: Reload services (Queue workers, Horizon, etc.)
+# Step 9: Reload services (Queue workers, Horizon, etc.)
 print_info "Reloading services..."
 
 # Try Laravel 11+ reload command first
@@ -232,7 +237,7 @@ if php artisan list 2>/dev/null | grep -q "horizon:terminate"; then
     fi
 fi
 
-# Step 9: Fix permissions (only for directories that need write access)
+# Step 10: Fix permissions (only for directories that need write access)
 print_info "Setting proper permissions..."
 
 # IMPORTANT: We only change permissions on storage and bootstrap/cache
@@ -268,7 +273,7 @@ fi
 
 print_status "Permissions set (storage & cache only)"
 
-# Step 10: Development optimizations
+# Step 11: Development optimizations
 print_info "Applying development optimizations..."
 # Ensure debug is enabled
 sed -i 's/APP_DEBUG=.*/APP_DEBUG=true/' .env
@@ -276,7 +281,7 @@ sed -i 's/APP_DEBUG=.*/APP_DEBUG=true/' .env
 sed -i 's/LOG_LEVEL=.*/LOG_LEVEL=debug/' .env
 print_status "Development optimizations applied (DEBUG=true, LOG_LEVEL=debug)"
 
-# Step 11: Restart PHP-FPM (user choice)
+# Step 12: Restart PHP-FPM (user choice)
 print_info "PHP-FPM restart is only needed for PHP configuration or OPcache changes"
 read -p "Restart PHP-FPM? (y/n) [default: n]: " -n 1 -r
 echo
@@ -296,7 +301,7 @@ else
     print_status "PHP-FPM restart skipped"
 fi
 
-# Step 12: Test application health
+# Step 13: Test application health
 print_info "Testing application health..."
 
 # Try to get the APP_URL from .env for accurate health check
@@ -324,7 +329,7 @@ case "$HTTP_CODE" in
     *) print_warning "Unexpected HTTP code: $HTTP_CODE (application may still work)" ;;
 esac
 
-# Step 13: Disable maintenance mode
+# Step 14: Disable maintenance mode
 if [ "$MAINTENANCE_ENABLED" = true ]; then
     print_info "Disabling maintenance mode..."
     php artisan up
@@ -355,7 +360,7 @@ print_info "Development Features Active:"
 print_info "  • Debug mode: ENABLED"
 print_info "  • Log level: DEBUG"
 print_info "  • Dev dependencies: INSTALLED"
-print_info "  • Caches: CLEARED for easy debugging"
+print_info "  • Caches: CLEARED and OPTIMIZED"
 echo ""
 
 print_status "Your development application is ready! 🚀"
