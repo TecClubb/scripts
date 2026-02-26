@@ -233,9 +233,17 @@ fi
 
 # Restart queue workers with Supervisor
 if command -v supervisorctl &> /dev/null; then
-    if supervisorctl status ${PROJECT_NAME}-worker:* &>/dev/null; then
+    # Check for both program group (worker:*) and simple program name (worker)
+    if supervisorctl status ${PROJECT_NAME}-worker:* &>/dev/null || supervisorctl status ${PROJECT_NAME}-worker &>/dev/null; then
         print_info "Restarting Supervisor queue workers..."
-        sudo supervisorctl restart ${PROJECT_NAME}-worker:* 2>/dev/null && print_status "Queue workers restarted" || print_warning "Failed to restart queue workers"
+        # Try restarting program group first, then fall back to simple program name
+        if sudo supervisorctl restart ${PROJECT_NAME}-worker:* 2>/dev/null; then
+            print_status "Queue workers restarted (program group)"
+        elif sudo supervisorctl restart ${PROJECT_NAME}-worker 2>/dev/null; then
+            print_status "Queue workers restarted"
+        else
+            print_warning "Failed to restart queue workers"
+        fi
     else
         print_info "No Supervisor queue workers configured for this project"
     fi
