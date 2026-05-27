@@ -675,6 +675,9 @@ if [[ "$SETUP_QUEUE" =~ ^[Yy]$ ]]; then
     
     read -p "Enter queue connection [default: $DEFAULT_QUEUE]: " QUEUE_CONNECTION
     QUEUE_CONNECTION=${QUEUE_CONNECTION:-$DEFAULT_QUEUE}
+
+    # Ensure proper ownership on storage
+    chown -R www-data:www-data ${WEB_ROOT}/${PROJECT_NAME}/storage
     
     # Create supervisor configuration for Laravel queue
     cat > /etc/supervisor/conf.d/${PROJECT_NAME}-worker.conf <<EOF
@@ -748,21 +751,14 @@ if [[ "$SETUP_SCHEDULER" =~ ^[Yy]$ ]]; then
     # Method 1: Direct crontab manipulation (most reliable)
     # First, ensure www-data has a valid shell for cron
     
-    # Get existing crontab for www-data (if any)
-    EXISTING_CRON=$(crontab -l -u www-data 2>/dev/null || echo "")
-    
-    # Check if the cron job already exists
-    if echo "$EXISTING_CRON" | grep -qF "${WEB_ROOT}/${PROJECT_NAME}"; then
-        print_status "Scheduler cron job already exists, updating..."
-        # Remove old entry for this project
-        EXISTING_CRON=$(echo "$EXISTING_CRON" | grep -v "${WEB_ROOT}/${PROJECT_NAME}" || echo "")
-    fi
-    
-    # Create new crontab content
-    NEW_CRON=$(echo -e "${EXISTING_CRON}\n${CRON_COMMAND}" | grep -v "^$" | sort -u)
-    
-    # Write the crontab
-    echo "$NEW_CRON" | crontab -u www-data -
+    # Get existing crontab for www-data, strip any old entry for this project
+    EXISTING_CRON=$(crontab -l -u www-data 2>/dev/null | grep -v "${WEB_ROOT}/${PROJECT_NAME}" || true)
+
+    # Write new crontab using printf (reliable across all shells)
+    {
+        [ -n "$EXISTING_CRON" ] && printf "%s\n" "$EXISTING_CRON"
+        printf "%s\n" "$CRON_COMMAND"
+    } | crontab -u www-data -
     
     # Verify the crontab was set
     if crontab -l -u www-data 2>/dev/null | grep -qF "${WEB_ROOT}/${PROJECT_NAME}"; then
