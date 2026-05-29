@@ -165,6 +165,55 @@ if [ -z "$DB_PASSWORD" ]; then
     echo -e "\033[0;33m[INFO]\033[0m Auto-generated database password: $DB_PASSWORD"
 fi
 
+# Database backup import option
+echo ""
+read -p "Import database from a SQL backup file instead of running migrations? (y/n) [default: n]: " IMPORT_DB
+IMPORT_DB=${IMPORT_DB:-n}
+BACKUP_FILE_PATH=""
+
+if [[ "$IMPORT_DB" =~ ^[Yy]$ ]]; then
+    BACKUP_SEARCH_DIRS=("/var/backups" "/root" "/tmp" "/home")
+    SQL_FILES=()
+
+    echo "Searching for SQL backup files..."
+    for dir in "${BACKUP_SEARCH_DIRS[@]}"; do
+        if [ -d "$dir" ]; then
+            while IFS= read -r -d '' file; do
+                SQL_FILES+=("$file")
+            done < <(find "$dir" -maxdepth 3 \( -name "*.sql" -o -name "*.sql.gz" \) -type f -print0 2>/dev/null)
+        fi
+    done
+
+    if [ ${#SQL_FILES[@]} -eq 0 ]; then
+        print_warning "No SQL files found in: ${BACKUP_SEARCH_DIRS[*]}"
+        read -p "Enter full path to your .sql or .sql.gz backup file: " BACKUP_FILE_PATH
+    else
+        echo ""
+        echo "Found SQL backup files:"
+        for i in "${!SQL_FILES[@]}"; do
+            echo "  $((i+1))) ${SQL_FILES[$i]}"
+        done
+        CUSTOM_OPT=$((${#SQL_FILES[@]}+1))
+        echo "  ${CUSTOM_OPT}) Enter a custom path"
+        echo ""
+        read -p "Select a file (1-${CUSTOM_OPT}): " FILE_CHOICE
+
+        if [[ "$FILE_CHOICE" =~ ^[0-9]+$ ]] && [ "$FILE_CHOICE" -ge 1 ] && [ "$FILE_CHOICE" -lt "$CUSTOM_OPT" ]; then
+            BACKUP_FILE_PATH="${SQL_FILES[$((FILE_CHOICE-1))]}"
+        else
+            read -p "Enter full path to your .sql or .sql.gz backup file: " BACKUP_FILE_PATH
+        fi
+    fi
+
+    if [ -z "$BACKUP_FILE_PATH" ] || [ ! -f "$BACKUP_FILE_PATH" ]; then
+        print_error "File not found: ${BACKUP_FILE_PATH:-<empty>}"
+        print_warning "Will fall back to running migrations instead."
+        IMPORT_DB=n
+    else
+        print_status "Backup file selected: $BACKUP_FILE_PATH"
+    fi
+fi
+
 read -p "Enter Web Root Directory [default: /var/www]: " WEB_ROOT
 WEB_ROOT=${WEB_ROOT:-/var/www}
 
@@ -630,13 +679,39 @@ php artisan key:generate
 print_status "Creating storage symbolic link..."
 php artisan storage:link
 
-print_status "Running database migrations..."
-php artisan migrate --force
+IMPORT_FROM_BACKUP=false
 
-read -p "Run database seeders? (y/n) [default: n]: " RUN_SEEDERS
-if [[ "$RUN_SEEDERS" =~ ^[Yy]$ ]]; then
-    print_status "Running database seeders..."
-    php artisan db:seed --force
+if [[ "$IMPORT_DB" =~ ^[Yy]$ ]] && [ -n "$BACKUP_FILE_PATH" ] && [ -f "$BACKUP_FILE_PATH" ]; then
+    print_status "Importing database from: $BACKUP_FILE_PATH"
+
+    if [[ "$BACKUP_FILE_PATH" == *.sql.gz ]]; then
+        print_status "Detected gzipped SQL — decompressing and importing..."
+        if gunzip -c "$BACKUP_FILE_PATH" | mysql -u"$DB_USER" -p"$DB_PASSWORD" "$DB_NAME"; then
+            print_status "Database imported successfully from gzipped backup!"
+            IMPORT_FROM_BACKUP=true
+        else
+            print_error "Database import failed! Falling back to migrations..."
+        fi
+    else
+        print_status "Importing SQL file..."
+        if mysql -u"$DB_USER" -p"$DB_PASSWORD" "$DB_NAME" < "$BACKUP_FILE_PATH"; then
+            print_status "Database imported successfully!"
+            IMPORT_FROM_BACKUP=true
+        else
+            print_error "Database import failed! Falling back to migrations..."
+        fi
+    fi
+fi
+
+if [ "$IMPORT_FROM_BACKUP" = false ]; then
+    print_status "Running database migrations..."
+    php artisan migrate --force
+
+    read -p "Run database seeders? (y/n) [default: n]: " RUN_SEEDERS
+    if [[ "$RUN_SEEDERS" =~ ^[Yy]$ ]]; then
+        print_status "Running database seeders..."
+        php artisan db:seed --force
+    fi
 fi
 
 # ===============================
