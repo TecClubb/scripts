@@ -901,7 +901,7 @@ server {
     charset utf-8;
 
     # Livewire routes - always go through Laravel (must be before static assets)
-    location ^~ /livewire/ {
+    location ^~ /livewire {
         try_files \$uri \$uri/ /index.php?\$query_string;
     }
 
