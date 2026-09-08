@@ -1,8 +1,11 @@
 #!/bin/bash
 
 # Laravel Project Auto-installer Script (Private Repo Supported)
-# Installs Laravel, PHP 8.2/8.3/8.4, Nginx, MySQL, Certbot
-# Supports cloning private GitHub repos with PAT/SSH authentication
+# Installs Laravel, PHP 8.1/8.2/8.3/8.4/8.5, Nginx, MySQL, Certbot
+# Supports cloning private GitHub repos with PAT/SSH authentication, or
+# auto-detecting an already-authenticated `gh` CLI / working SSH key
+# Each project gets its own PHP-FPM pool, so different sites can run
+# different PHP versions (or just isolated pools) on the same server
 # Works on fresh VPS servers - installs all required dependencies
 
 set -e
@@ -98,20 +101,26 @@ print_section "Configuration"
 
 # PHP Version Selection
 echo "Select PHP Version:"
-echo "1) PHP 8.2"
-echo "2) PHP 8.3"
-echo "3) PHP 8.4"
-read -p "Enter your choice (1-3) [default: 2]: " PHP_CHOICE
-PHP_CHOICE=${PHP_CHOICE:-2}
+echo "1) PHP 8.1"
+echo "2) PHP 8.2"
+echo "3) PHP 8.3"
+echo "4) PHP 8.4"
+echo "5) PHP 8.5"
+read -p "Enter your choice (1-5) [default: 3]: " PHP_CHOICE
+PHP_CHOICE=${PHP_CHOICE:-3}
 
 case $PHP_CHOICE in
-    1) PHP_VERSION="8.2" ;;
-    2) PHP_VERSION="8.3" ;;
-    3) PHP_VERSION="8.4" ;;
+    1) PHP_VERSION="8.1" ;;
+    2) PHP_VERSION="8.2" ;;
+    3) PHP_VERSION="8.3" ;;
+    4) PHP_VERSION="8.4" ;;
+    5) PHP_VERSION="8.5" ;;
     *) PHP_VERSION="8.3" ;;
 esac
 
 print_status "Selected PHP version: $PHP_VERSION"
+print_status "Note: each project gets its own PHP-FPM pool, so different projects on this"
+print_status "server can each run their own PHP version independently."
 
 # Project Configuration
 read -p "Enter Project Name [default: laravel-app]: " PROJECT_NAME
@@ -251,45 +260,94 @@ else
 fi
 
 # ===============================
-# Git Clone Method Selection
+# Git Auth Auto-detection
 # ===============================
 echo ""
-echo "Select Git Clone Method:"
-echo "1) SSH (recommended for VPS - uses SSH keys)"
-echo "2) HTTPS (uses Personal Access Token)"
-read -p "Enter your choice (1-2) [default: 1]: " GIT_METHOD
-GIT_METHOD=${GIT_METHOD:-1}
+print_section "Git Authentication"
 
-if [ "$GIT_METHOD" = "1" ]; then
-    # SSH Method
-    read -p "Enter your GitHub SSH URL (e.g., git@github.com:OWNER/REPO.git): " GITHUB_REPO_URL
-    
-    # Verify SSH key exists
-    if [ ! -f ~/.ssh/id_rsa ] && [ ! -f ~/.ssh/id_ed25519 ]; then
-        print_warning "No SSH key found. Generating new SSH key..."
-        read -p "Enter your email for SSH key: " SSH_EMAIL
-        ssh-keygen -t ed25519 -C "$SSH_EMAIL" -f ~/.ssh/id_ed25519 -N ""
-        print_status "SSH public key generated. Add this to your GitHub account:"
-        cat ~/.ssh/id_ed25519.pub
-        read -p "Press Enter after adding the SSH key to GitHub..."
-    fi
-    
-    # Add GitHub to known hosts
-    ssh-keyscan github.com >> ~/.ssh/known_hosts 2>/dev/null
-    
-else
-    # HTTPS Method
-    read -p "Enter your GitHub Username: " GITHUB_USER
-    read -sp "Enter your GitHub Token (PAT): " GITHUB_TOKEN
-    echo
-    read -p "Enter your GitHub Repo URL (e.g., https://github.com/OWNER/REPO): " GITHUB_REPO_URL_INPUT
-    
-    # Construct Authenticated Repo URL
-    GITHUB_REPO_URL="https://$GITHUB_USER:$GITHUB_TOKEN@${GITHUB_REPO_URL_INPUT#https://}"
-    [[ "$GITHUB_REPO_URL" != *.git ]] && GITHUB_REPO_URL="${GITHUB_REPO_URL}.git"
+mkdir -p ~/.ssh && chmod 700 ~/.ssh
+ssh-keyscan -H github.com >> ~/.ssh/known_hosts 2>/dev/null || true
+
+DETECTED_GH_USER=""
+DETECTED_SSH_OK=false
+GIT_METHOD=""
+
+# 1) Already-authenticated GitHub CLI
+if command -v gh &>/dev/null && gh auth status &>/dev/null; then
+    DETECTED_GH_USER=$(gh api user --jq .login 2>/dev/null || echo "unknown")
+    print_status "Detected an already-authenticated GitHub CLI account: $DETECTED_GH_USER"
 fi
 
-print_status "Repository URL configured"
+# 2) Working SSH key already authorized against GitHub
+if [ -f ~/.ssh/id_rsa ] || [ -f ~/.ssh/id_ed25519 ]; then
+    if ssh -T git@github.com -o BatchMode=yes -o ConnectTimeout=5 2>&1 | grep -q "successfully authenticated"; then
+        DETECTED_SSH_OK=true
+        print_status "Detected a working SSH key already authorized with GitHub"
+    fi
+fi
+
+if [ -n "$DETECTED_GH_USER" ]; then
+    read -p "Use the existing GitHub CLI account ($DETECTED_GH_USER) to pull the repo? (y/n) [default: y]: " USE_GH
+    USE_GH=${USE_GH:-y}
+    if [[ "$USE_GH" =~ ^[Yy]$ ]]; then
+        GIT_METHOD="gh"
+    fi
+elif [ "$DETECTED_SSH_OK" = true ]; then
+    read -p "Use the existing working SSH key to clone via SSH? (y/n) [default: y]: " USE_SSH
+    USE_SSH=${USE_SSH:-y}
+    if [[ "$USE_SSH" =~ ^[Yy]$ ]]; then
+        GIT_METHOD="1"
+    fi
+fi
+
+if [ "$GIT_METHOD" = "gh" ]; then
+    read -p "Enter the repo (OWNER/REPO or full URL): " GH_REPO_INPUT
+    GH_REPO_INPUT="${GH_REPO_INPUT#https://github.com/}"
+    GH_REPO_INPUT="${GH_REPO_INPUT%.git}"
+    GITHUB_REPO_URL="$GH_REPO_INPUT"
+elif [ "$GIT_METHOD" = "1" ]; then
+    read -p "Enter your GitHub SSH URL (e.g., git@github.com:OWNER/REPO.git): " GITHUB_REPO_URL
+else
+    # No working auth detected (or user declined) - fall back to manual selection
+    echo ""
+    echo "No existing GitHub authentication detected (or declined)."
+    echo "Select Git Clone Method:"
+    echo "1) SSH (recommended for VPS - uses SSH keys)"
+    echo "2) HTTPS (uses Personal Access Token)"
+    read -p "Enter your choice (1-2) [default: 1]: " GIT_METHOD
+    GIT_METHOD=${GIT_METHOD:-1}
+
+    if [ "$GIT_METHOD" = "1" ]; then
+        # SSH Method
+        read -p "Enter your GitHub SSH URL (e.g., git@github.com:OWNER/REPO.git): " GITHUB_REPO_URL
+
+        # Verify SSH key exists
+        if [ ! -f ~/.ssh/id_rsa ] && [ ! -f ~/.ssh/id_ed25519 ]; then
+            print_warning "No SSH key found. Generating new SSH key..."
+            read -p "Enter your email for SSH key: " SSH_EMAIL
+            ssh-keygen -t ed25519 -C "$SSH_EMAIL" -f ~/.ssh/id_ed25519 -N ""
+            print_status "SSH public key generated. Add this to your GitHub account:"
+            cat ~/.ssh/id_ed25519.pub
+            read -p "Press Enter after adding the SSH key to GitHub..."
+        fi
+
+        # Add GitHub to known hosts
+        ssh-keyscan github.com >> ~/.ssh/known_hosts 2>/dev/null
+
+    else
+        # HTTPS Method
+        read -p "Enter your GitHub Username: " GITHUB_USER
+        read -sp "Enter your GitHub Token (PAT): " GITHUB_TOKEN
+        echo
+        read -p "Enter your GitHub Repo URL (e.g., https://github.com/OWNER/REPO): " GITHUB_REPO_URL_INPUT
+
+        # Construct Authenticated Repo URL
+        GITHUB_REPO_URL="https://$GITHUB_USER:$GITHUB_TOKEN@${GITHUB_REPO_URL_INPUT#https://}"
+        [[ "$GITHUB_REPO_URL" != *.git ]] && GITHUB_REPO_URL="${GITHUB_REPO_URL}.git"
+    fi
+fi
+
+print_status "Repository configured (method: $([ "$GIT_METHOD" = "gh" ] && echo "gh CLI" || ([ "$GIT_METHOD" = "1" ] && echo "SSH" || echo "HTTPS")))"
 
 # ===============================
 # Function to extract root domain from subdomain
@@ -318,7 +376,15 @@ extract_root_domain() {
 # ===============================
 print_section "Verifying Repository Access"
 
-if [ "$GIT_METHOD" = "1" ]; then
+if [ "$GIT_METHOD" = "gh" ]; then
+    # Test repository access via gh CLI
+    if ! gh repo view "$GITHUB_REPO_URL" &>/dev/null; then
+        print_error "Cannot access repository via gh CLI: $GITHUB_REPO_URL"
+        print_error "Please verify the repo name and that this GitHub account has access."
+        exit 1
+    fi
+    print_status "gh CLI repository access verified!"
+elif [ "$GIT_METHOD" = "1" ]; then
     # Test SSH connection to GitHub
     if ! ssh -T git@github.com 2>&1 | grep -q "successfully authenticated"; then
         print_error "SSH connection to GitHub failed!"
@@ -326,7 +392,7 @@ if [ "$GIT_METHOD" = "1" ]; then
         exit 1
     fi
     print_status "SSH connection to GitHub verified!"
-    
+
     # Test repository access with ls-remote
     if ! git ls-remote "$GITHUB_REPO_URL" HEAD &>/dev/null; then
         print_error "Cannot access repository: $GITHUB_REPO_URL"
@@ -387,29 +453,51 @@ else
     print_status "PHP repository already added"
 fi
 
-print_status "Installing PHP $PHP_VERSION with Laravel required extensions..."
+print_status "Checking whether PHP $PHP_VERSION with required extensions is already installed..."
 
-# Build core installation command
-PHP_PACKAGES="php${PHP_VERSION}"
-for ext in "${CORE_EXTENSIONS[@]}"; do
-    PHP_PACKAGES="$PHP_PACKAGES php${PHP_VERSION}-${ext}"
-done
-
-# Install PHP packages (ignore errors for built-in extensions)
-apt-get install -y $PHP_PACKAGES 2>/dev/null || {
-    print_warning "Some extensions may be built into PHP core, installing individually..."
-    apt-get install -y php${PHP_VERSION} php${PHP_VERSION}-cli php${PHP_VERSION}-fpm php${PHP_VERSION}-common
-    for ext in curl mbstring xml zip bcmath mysql opcache; do
-        apt-get install -y php${PHP_VERSION}-${ext} 2>/dev/null || true
+# Check if every required package for this PHP version is already installed.
+# If so, skip apt-get entirely instead of re-downloading/reinstalling.
+php_version_fully_ready() {
+    local ver="$1"
+    command -v "php${ver}" &>/dev/null || return 1
+    local pkg
+    for ext in "${CORE_EXTENSIONS[@]}"; do
+        pkg="php${ver}-${ext}"
+        dpkg -l "$pkg" 2>/dev/null | grep -q "^ii" || return 1
     done
+    return 0
 }
 
-# Verify PHP installation
-if command -v php &> /dev/null; then
-    INSTALLED_PHP=$(php -v | head -n 1)
+if php_version_fully_ready "$PHP_VERSION"; then
+    print_status "PHP $PHP_VERSION and all required extensions are already installed — skipping install"
+else
+    print_status "Installing PHP $PHP_VERSION with Laravel required extensions..."
+
+    # Build core installation command
+    PHP_PACKAGES="php${PHP_VERSION}"
+    for ext in "${CORE_EXTENSIONS[@]}"; do
+        PHP_PACKAGES="$PHP_PACKAGES php${PHP_VERSION}-${ext}"
+    done
+
+    # Install PHP packages (ignore errors for built-in extensions)
+    apt-get install -y $PHP_PACKAGES 2>/dev/null || {
+        print_warning "Some extensions may be built into PHP core, installing individually..."
+        apt-get install -y php${PHP_VERSION} php${PHP_VERSION}-cli php${PHP_VERSION}-fpm php${PHP_VERSION}-common
+        for ext in curl mbstring xml zip bcmath mysql opcache; do
+            apt-get install -y php${PHP_VERSION}-${ext} 2>/dev/null || true
+        done
+    }
+fi
+
+# Verify the SPECIFIC PHP version we asked for was installed (not just
+# whatever "php" happens to point at via update-alternatives)
+if command -v "php${PHP_VERSION}" &> /dev/null; then
+    INSTALLED_PHP=$(php${PHP_VERSION} -v | head -n 1)
     print_status "PHP installed: $INSTALLED_PHP"
 else
-    print_error "PHP installation failed!"
+    print_error "PHP ${PHP_VERSION} installation failed!"
+    print_error "This version may not yet be available in the ondrej/php PPA."
+    print_error "Check availability with: apt-cache search php${PHP_VERSION}"
     exit 1
 fi
 
@@ -578,7 +666,12 @@ print_status "Cloning your GitHub repository..."
 mkdir -p $WEB_ROOT
 cd $WEB_ROOT
 rm -rf $PROJECT_NAME 2>/dev/null || true
-git clone $GITHUB_REPO_URL $PROJECT_NAME
+
+if [ "$GIT_METHOD" = "gh" ]; then
+    gh repo clone "$GITHUB_REPO_URL" "$PROJECT_NAME"
+else
+    git clone $GITHUB_REPO_URL $PROJECT_NAME
+fi
 cd $PROJECT_NAME
 
 # ===============================
@@ -726,60 +819,97 @@ if [[ "$SETUP_QUEUE" =~ ^[Yy]$ ]] || [[ "$SETUP_SCHEDULER" =~ ^[Yy]$ ]]; then
     systemctl enable supervisor
 fi
 
+QUEUE_NAMES=()
+QUEUE_WORKERS_COUNT=()
+
 if [[ "$SETUP_QUEUE" =~ ^[Yy]$ ]]; then
     print_status "Configuring Queue Workers with Supervisor..."
-    
-    # Clean up old supervisor config for this project
-    if [ -f "/etc/supervisor/conf.d/${PROJECT_NAME}-worker.conf" ]; then
-        print_status "Removing old supervisor configuration..."
-        supervisorctl stop ${PROJECT_NAME}-worker:* 2>/dev/null || true
-        rm -f /etc/supervisor/conf.d/${PROJECT_NAME}-worker.conf
+
+    # Clean up old supervisor configs for THIS project only (never touch other projects' queues)
+    EXISTING_QUEUE_CONFS=$(ls /etc/supervisor/conf.d/${PROJECT_NAME}-*-worker.conf 2>/dev/null || true)
+    if [ -n "$EXISTING_QUEUE_CONFS" ]; then
+        print_status "Removing old supervisor configuration(s) for ${PROJECT_NAME}..."
+        for conf in $EXISTING_QUEUE_CONFS; do
+            PROG=$(basename "$conf" .conf)
+            supervisorctl stop "${PROG}:*" 2>/dev/null || true
+            rm -f "$conf"
+        done
         supervisorctl reread 2>/dev/null || true
         supervisorctl update 2>/dev/null || true
     fi
-    
-    read -p "Enter number of queue workers [default: 2]: " NUM_WORKERS
-    NUM_WORKERS=${NUM_WORKERS:-2}
-    
+
     # Determine default queue connection based on Redis setup
     if [ "$REDIS_ENABLED" = true ] && [[ "$REDIS_QUEUE" =~ ^[Yy]$ ]]; then
         DEFAULT_QUEUE="redis"
     else
         DEFAULT_QUEUE="database"
     fi
-    
-    read -p "Enter queue connection [default: $DEFAULT_QUEUE]: " QUEUE_CONNECTION
+
+    read -p "Enter queue connection (used by all queue groups) [default: $DEFAULT_QUEUE]: " QUEUE_CONNECTION
     QUEUE_CONNECTION=${QUEUE_CONNECTION:-$DEFAULT_QUEUE}
+
+    # Multiple named queues (e.g. default, emails, health)
+    echo ""
+    echo "You can run multiple queue worker groups for this project, each watching its"
+    echo "own named Laravel queue (e.g. 'default', 'emails', 'health'). Workers for a"
+    echo "group only process jobs dispatched to that queue name."
+    read -p "How many queue worker groups do you want? [default: 1]: " NUM_QUEUE_GROUPS
+    NUM_QUEUE_GROUPS=${NUM_QUEUE_GROUPS:-1}
+    if ! [[ "$NUM_QUEUE_GROUPS" =~ ^[0-9]+$ ]] || [ "$NUM_QUEUE_GROUPS" -lt 1 ]; then
+        NUM_QUEUE_GROUPS=1
+    fi
+
+    for ((i=1; i<=NUM_QUEUE_GROUPS; i++)); do
+        DEFAULT_QNAME="default"
+        [ "$i" -gt 1 ] && DEFAULT_QNAME=""
+        read -p "  Queue #$i name (Laravel queue name, e.g. default/emails/health)${DEFAULT_QNAME:+ [default: $DEFAULT_QNAME]}: " QNAME
+        QNAME=${QNAME:-$DEFAULT_QNAME}
+        if [ -z "$QNAME" ]; then
+            print_warning "Queue name cannot be empty, using 'queue${i}'"
+            QNAME="queue${i}"
+        fi
+        read -p "  Number of workers for '$QNAME' [default: 2]: " QWORKERS
+        QWORKERS=${QWORKERS:-2}
+        QUEUE_NAMES+=("$QNAME")
+        QUEUE_WORKERS_COUNT+=("$QWORKERS")
+    done
 
     # Ensure proper ownership on storage
     chown -R www-data:www-data ${WEB_ROOT}/${PROJECT_NAME}/storage
-    
-    # Create supervisor configuration for Laravel queue
-    cat > /etc/supervisor/conf.d/${PROJECT_NAME}-worker.conf <<EOF
-[program:${PROJECT_NAME}-worker]
+
+    # Create one supervisor program block per named queue
+    for i in "${!QUEUE_NAMES[@]}"; do
+        QNAME="${QUEUE_NAMES[$i]}"
+        QWORKERS="${QUEUE_WORKERS_COUNT[$i]}"
+        PROGRAM_NAME="${PROJECT_NAME}-${QNAME}-worker"
+
+        cat > /etc/supervisor/conf.d/${PROGRAM_NAME}.conf <<EOF
+[program:${PROGRAM_NAME}]
 process_name=%(program_name)s_%(process_num)02d
-command=php ${WEB_ROOT}/${PROJECT_NAME}/artisan queue:work ${QUEUE_CONNECTION} --sleep=3 --tries=3 --max-time=3600
+command=php ${WEB_ROOT}/${PROJECT_NAME}/artisan queue:work ${QUEUE_CONNECTION} --queue=${QNAME} --sleep=3 --tries=3 --max-time=3600
 autostart=true
 autorestart=true
 stopasgroup=true
 killasgroup=true
 user=www-data
-numprocs=${NUM_WORKERS}
+numprocs=${QWORKERS}
 redirect_stderr=true
-stdout_logfile=${WEB_ROOT}/${PROJECT_NAME}/storage/logs/worker.log
+stdout_logfile=${WEB_ROOT}/${PROJECT_NAME}/storage/logs/worker-${QNAME}.log
 stopwaitsecs=3600
 EOF
+        print_status "  Configured queue group '${QNAME}' with ${QWORKERS} worker(s) -> ${PROGRAM_NAME}"
+    done
 
-    # Update .env with queue configuration
+    # Update .env with queue configuration (default connection; first queue name as default queue)
     sed -i "s|QUEUE_CONNECTION=.*|QUEUE_CONNECTION=${QUEUE_CONNECTION}|g" ${WEB_ROOT}/${PROJECT_NAME}/.env
-    
+
     # Create queue table if using database driver
     if [ "$QUEUE_CONNECTION" = "database" ]; then
         echo ""
         echo "Database queue driver selected."
         read -p "Create queue tables? (Skip if already exists) (y/n) [default: y]: " CREATE_QUEUE_TABLE
         CREATE_QUEUE_TABLE=${CREATE_QUEUE_TABLE:-y}
-        
+
         if [[ "$CREATE_QUEUE_TABLE" =~ ^[Yy]$ ]]; then
             print_status "Creating queue tables..."
             cd ${WEB_ROOT}/${PROJECT_NAME}
@@ -789,13 +919,36 @@ EOF
             print_status "Skipping queue table creation"
         fi
     fi
-    
-    # Reload supervisor
+
+    # Reload supervisor and start all queue groups for this project
     supervisorctl reread
     supervisorctl update
-    supervisorctl start ${PROJECT_NAME}-worker:*
-    
-    print_status "Queue workers configured and started!"
+    for QNAME in "${QUEUE_NAMES[@]}"; do
+        supervisorctl start "${PROJECT_NAME}-${QNAME}-worker:*" 2>/dev/null || true
+    done
+
+    # Verify every queue group actually came up
+    echo ""
+    print_status "Verifying queue workers..."
+    sleep 2
+    ALL_QUEUES_OK=true
+    for QNAME in "${QUEUE_NAMES[@]}"; do
+        PROGRAM_NAME="${PROJECT_NAME}-${QNAME}-worker"
+        Q_STATUS=$(supervisorctl status "${PROGRAM_NAME}:*" 2>/dev/null || true)
+        if [ -n "$Q_STATUS" ] && ! echo "$Q_STATUS" | grep -qv "RUNNING"; then
+            print_status "  Queue '${QNAME}': RUNNING ($(echo "$Q_STATUS" | wc -l) process(es))"
+        else
+            print_error "  Queue '${QNAME}': NOT fully running"
+            echo "$Q_STATUS"
+            ALL_QUEUES_OK=false
+        fi
+    done
+
+    if [ "$ALL_QUEUES_OK" = true ]; then
+        print_status "All queue worker groups are running!"
+    else
+        print_warning "One or more queue groups are not running. Check: supervisorctl status | grep ${PROJECT_NAME}"
+    fi
 fi
 
 if [[ "$SETUP_SCHEDULER" =~ ^[Yy]$ ]]; then
@@ -865,18 +1018,49 @@ if [[ "$SETUP_SCHEDULER" =~ ^[Yy]$ ]]; then
 fi
 
 # ===============================
+# Configure PHP-FPM Pool (per-project, so each site is isolated and can
+# run its own PHP version independently of other sites on this server)
+# ===============================
+print_section "Configuring PHP-FPM Pool for $PROJECT_NAME"
+
+FPM_POOL_DIR="/etc/php/${PHP_VERSION}/fpm/pool.d"
+FPM_POOL_FILE="${FPM_POOL_DIR}/${PROJECT_NAME}.conf"
+FPM_SOCK="/run/php/php${PHP_VERSION}-fpm-${PROJECT_NAME}.sock"
+
+mkdir -p "$FPM_POOL_DIR"
+
+cat > "$FPM_POOL_FILE" <<EOF
+[${PROJECT_NAME}]
+user = www-data
+group = www-data
+listen = ${FPM_SOCK}
+listen.owner = www-data
+listen.group = www-data
+pm = dynamic
+pm.max_children = 10
+pm.start_servers = 2
+pm.min_spare_servers = 1
+pm.max_spare_servers = 4
+pm.max_requests = 500
+chdir = ${WEB_ROOT}/${PROJECT_NAME}
+php_admin_value[error_log] = ${WEB_ROOT}/${PROJECT_NAME}/storage/logs/php-fpm-error.log
+php_admin_flag[log_errors] = on
+EOF
+
+print_status "Created dedicated PHP-FPM pool '${PROJECT_NAME}' (PHP ${PHP_VERSION}) at socket ${FPM_SOCK}"
+
+# ===============================
 # Configure Nginx
 # ===============================
 print_section "Configuring Nginx"
 
-# Clean up old/conflicting Nginx configurations
-print_status "Cleaning up old Nginx configurations..."
-# Remove any existing symlinks in sites-enabled (except default which we handle separately)
-find /etc/nginx/sites-enabled/ -type l ! -name "default" -delete 2>/dev/null || true
-# Remove old config files that might conflict with our domains
-for domain in "${DOMAIN_ARRAY[@]}"; do
-    rm -f /etc/nginx/sites-available/$domain 2>/dev/null || true
-done
+# Clean up ONLY this project's own previous Nginx config/symlink.
+# We deliberately never touch other sites' configs or symlinks here.
+print_status "Cleaning up any previous Nginx configuration for ${PROJECT_NAME}..."
+if [ -L "/etc/nginx/sites-enabled/${PROJECT_NAME}" ]; then
+    rm -f "/etc/nginx/sites-enabled/${PROJECT_NAME}"
+fi
+rm -f "/etc/nginx/sites-available/${PROJECT_NAME}"
 
 # Build server_name directive with all domains
 ALL_DOMAINS=$(IFS=' '; echo "${DOMAIN_ARRAY[*]}")
@@ -933,7 +1117,7 @@ server {
 
     # PHP-FPM configuration
     location ~ ^/index\.php(/|$) {
-        fastcgi_pass unix:/var/run/php/php${PHP_VERSION}-fpm.sock;
+        fastcgi_pass unix:${FPM_SOCK};
         fastcgi_param SCRIPT_FILENAME \$realpath_root\$fastcgi_script_name;
         include fastcgi_params;
         fastcgi_hide_header X-Powered-By;
@@ -1030,7 +1214,7 @@ if [ "$ENABLE_SSL" = true ]; then
     fi
 fi
 
-# Restart PHP-FPM
+# Restart PHP-FPM (reloads pool config, including the new per-project pool)
 print_status "Configuring PHP-FPM..."
 systemctl enable php${PHP_VERSION}-fpm
 systemctl restart php${PHP_VERSION}-fpm
@@ -1040,6 +1224,16 @@ if systemctl is-active --quiet php${PHP_VERSION}-fpm; then
     print_status "PHP-FPM is running"
 else
     print_error "PHP-FPM failed to start!"
+    exit 1
+fi
+
+# Verify this project's dedicated pool socket actually came up
+sleep 1
+if [ -S "$FPM_SOCK" ]; then
+    print_status "PHP-FPM pool socket for ${PROJECT_NAME} is active: ${FPM_SOCK}"
+else
+    print_error "PHP-FPM pool socket for ${PROJECT_NAME} was not created: ${FPM_SOCK}"
+    print_error "Check: php-fpm${PHP_VERSION} -t and journalctl -u php${PHP_VERSION}-fpm"
     exit 1
 fi
 
@@ -1099,14 +1293,18 @@ print_status "  User: $DB_USER"
 print_status "  Password: $DB_PASSWORD"
 print_status ""
 print_status "PHP Version: $PHP_VERSION"
+print_status "PHP-FPM Pool Socket: $FPM_SOCK"
 print_status "Project Path: $WEB_ROOT/$PROJECT_NAME"
 
 if [[ "$SETUP_QUEUE" =~ ^[Yy]$ ]]; then
     print_status ""
-    print_status "Queue Workers: Enabled ($NUM_WORKERS workers)"
+    print_status "Queue Workers: Enabled (${#QUEUE_NAMES[@]} queue group(s))"
     print_status "  Connection: $QUEUE_CONNECTION"
-    print_status "  Status: supervisorctl status ${PROJECT_NAME}-worker:*"
-    print_status "  Logs: $WEB_ROOT/$PROJECT_NAME/storage/logs/worker.log"
+    for i in "${!QUEUE_NAMES[@]}"; do
+        QNAME="${QUEUE_NAMES[$i]}"
+        QWORKERS="${QUEUE_WORKERS_COUNT[$i]}"
+        print_status "  - '${QNAME}': ${QWORKERS} worker(s) | status: supervisorctl status ${PROJECT_NAME}-${QNAME}-worker:* | log: $WEB_ROOT/$PROJECT_NAME/storage/logs/worker-${QNAME}.log"
+    done
 fi
 
 if [[ "$SETUP_SCHEDULER" =~ ^[Yy]$ ]]; then
