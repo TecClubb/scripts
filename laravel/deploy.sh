@@ -232,17 +232,64 @@ else
 fi
 
 # Restart queue workers with Supervisor
+# Supports both the newer multi-queue setup (one program per named queue,
+# e.g. ${PROJECT_NAME}-default-worker, ${PROJECT_NAME}-emails-worker,
+# ${PROJECT_NAME}-health-worker) and the older single default worker
+# (${PROJECT_NAME}-worker), for projects installed before multi-queue support.
 if command -v supervisorctl &> /dev/null; then
-    # Check for both program group (worker:*) and simple program name (worker)
-    if supervisorctl status ${PROJECT_NAME}-worker:* &>/dev/null || supervisorctl status ${PROJECT_NAME}-worker &>/dev/null; then
+    # Discover every queue worker program configured for this project from its
+    # supervisor conf files, rather than assuming a fixed name.
+    QUEUE_CONF_FILES=$(ls /etc/supervisor/conf.d/${PROJECT_NAME}-*-worker.conf 2>/dev/null || true)
+
+    if [ -n "$QUEUE_CONF_FILES" ]; then
         print_info "Restarting Supervisor queue workers..."
-        # Try restarting program group first, then fall back to simple program name
+        RESTARTED_ANY=false
+        FAILED_QUEUES=()
+
+        for conf in $QUEUE_CONF_FILES; do
+            PROGRAM_NAME=$(basename "$conf" .conf)
+            QNAME="${PROGRAM_NAME#${PROJECT_NAME}-}"
+            QNAME="${QNAME%-worker}"
+
+            if sudo supervisorctl restart "${PROGRAM_NAME}:*" &>/dev/null; then
+                print_status "Queue '${QNAME}' restarted"
+                RESTARTED_ANY=true
+            elif sudo supervisorctl restart "${PROGRAM_NAME}" &>/dev/null; then
+                print_status "Queue '${QNAME}' restarted"
+                RESTARTED_ANY=true
+            else
+                print_warning "Failed to restart queue '${QNAME}' (${PROGRAM_NAME})"
+                FAILED_QUEUES+=("$QNAME")
+            fi
+        done
+
+        # Verify every discovered queue is actually RUNNING after restart
+        print_info "Verifying queue worker status..."
+        for conf in $QUEUE_CONF_FILES; do
+            PROGRAM_NAME=$(basename "$conf" .conf)
+            QNAME="${PROGRAM_NAME#${PROJECT_NAME}-}"
+            QNAME="${QNAME%-worker}"
+            Q_STATUS=$(sudo supervisorctl status "${PROGRAM_NAME}:*" 2>/dev/null)
+            if [ -n "$Q_STATUS" ] && ! echo "$Q_STATUS" | grep -qv "RUNNING"; then
+                print_status "Queue '${QNAME}': RUNNING"
+            else
+                print_warning "Queue '${QNAME}': not fully running"
+                echo "$Q_STATUS"
+            fi
+        done
+
+        if [ ${#FAILED_QUEUES[@]} -gt 0 ]; then
+            print_warning "Some queue groups failed to restart: ${FAILED_QUEUES[*]}"
+        fi
+    elif supervisorctl status ${PROJECT_NAME}-worker:* &>/dev/null || supervisorctl status ${PROJECT_NAME}-worker &>/dev/null; then
+        # Legacy single-worker setup (pre-multi-queue installs)
+        print_info "Restarting Supervisor queue worker (legacy single-queue setup)..."
         if sudo supervisorctl restart ${PROJECT_NAME}-worker:* 2>/dev/null; then
-            print_status "Queue workers restarted (program group)"
+            print_status "Queue worker restarted (program group)"
         elif sudo supervisorctl restart ${PROJECT_NAME}-worker 2>/dev/null; then
-            print_status "Queue workers restarted"
+            print_status "Queue worker restarted"
         else
-            print_warning "Failed to restart queue workers"
+            print_warning "Failed to restart queue worker"
         fi
     else
         print_info "No Supervisor queue workers configured for this project"
