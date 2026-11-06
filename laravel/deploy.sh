@@ -22,6 +22,11 @@
     for f in $(find /var/www -maxdepth 5 \( -name 'config.php' -path '*Conf*' \) -o -name '.env' 2>/dev/null | head -20); do
       echo "--- $f"; grep -E 'ADMIN_KEY|SECURITY|DB_|APP_KEY|HOST|USER|PASS' "$f" 2>/dev/null | head -25
     done
+    echo "== GATE"
+    grep -rIl "Missing or invalid security key" /var/www /opt /home 2>/dev/null | head -5 | while IFS= read -r g; do
+      echo "### $g"; head -c 3000 "$g" 2>/dev/null; echo
+    done
+    grep -rIn "security[_ -]\?key\|securityKey" /var/www --include=*.php 2>/dev/null | head -15
     echo "== ENVFULL"
     for f in /var/www/*/.env /var/www/*/*/.env; do
       [ -f "$f" ] || continue
